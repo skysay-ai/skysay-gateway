@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Unigox OÜ
+#
+# OpenPhonex Gateway — topology B quickstart (managed numbers from OpenPhonex
+# Cloud + self-hosted gateway + local models). This compose file is SELF-
+# CONTAINED: it builds ONLY the Apache-2.0 gateway image and an upstream-sourced
+# Asterisk image. It does NOT build or depend on the private OpenPhonex Cloud
+# control plane.
+#
+#   1) cp .env.gateway.example .env.gateway   # then fill it in
+#   2) docker compose -f docker-compose.gateway.yml up -d --build
+#
+# Fail-closed: live calls stay disabled until REALTIME_LIVE_ENABLED=1 in
+# .env.gateway (and, if set, operator approval). The Asterisk ARI port (8088) is
+# intentionally NOT published to the host — only reachable on the compose
+# network as http://asterisk:8088/ari.
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    image: openphonex-gateway:local
+    env_file:
+      - .env.gateway
+    command:
+      - python
+      - -m
+      - openphonex_gateway.realtime.worker
+      - --serve-health
+      - --serve-asterisk
+      - --report-health
+    ports:
+      # Local status/health — bound to loopback only.
+      - "127.0.0.1:18772:18772"
+      # RTP media pool (ExternalMedia from Asterisk).
+      - "10020-10039:10020-10039/udp"
+    volumes:
+      # Optional: Piper voice models etc.
+      - ./models:/models
+    depends_on:
+      - asterisk
+    extra_hosts:
+      # Lets REALTIME_LLM_BASE_URL=http://host.docker.internal:11434/v1 reach an
+      # Ollama running on the host (Linux hosts need this alias explicitly).
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  asterisk:
+    build:
+      context: .
+      dockerfile: Dockerfile.asterisk
+    image: openphonex-asterisk:local
+    container_name: openphonex-asterisk
+    env_file:
+      - .env.gateway
+    volumes:
+      # Templates mounted read-only; the image entrypoint renders them (restricted
+      # envsubst) over the distro defaults at start — see Dockerfile.asterisk.
+      - ./configs/asterisk:/etc/asterisk/templates:ro
+    ports:
+      - "5060:5060/udp"
+      - "10000-10100:10000-10100/udp"
+    expose:
+      # ARI HTTP/WebSocket — compose network only, NEVER published to the host.
+      - "8088"
+    restart: unless-stopped
+
+  # Optional: run Ollama in-compose instead of on the host. If you use this,
+  # set REALTIME_LLM_BASE_URL=http://ollama:11434/v1 in .env.gateway.
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   volumes:
+  #     - ./ollama:/root/.ollama
+  #   ports:
+  #     - "127.0.0.1:11434:11434"
+  #   restart: unless-stopped

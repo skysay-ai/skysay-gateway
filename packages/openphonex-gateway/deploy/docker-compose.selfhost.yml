@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Unigox OÜ
+#
+# OpenPhonex Gateway — SELF-HOST quickstart (bring your OWN, already-running
+# Asterisk container). See SELFHOST.md next to this file for the full runbook.
+#
+# Topology (validated live on the openphonex-demo droplet, GA-6):
+#   * the gateway container JOINS your existing Asterisk docker network
+#     (`external: true` — compose must NEVER create/replace that network),
+#   * it claims one STATIC IP on that network so Asterisk's ExternalMedia RTP
+#     has a stable container-to-container destination (no docker0 hairpin),
+#   * only the worker health/status port is published, and only on loopback.
+#
+#   cp .env.selfhost.example .env.selfhost        # then fill it in
+#   docker compose --env-file .env.selfhost -f docker-compose.selfhost.yml up -d --build
+#
+# The `--env-file` flag matters: ASTERISK_DOCKER_NETWORK / GATEWAY_STATIC_IP
+# below are compose *interpolation* variables (service `env_file:` values are
+# NOT used for interpolation).
+#
+# Standalone by design: with all OPENPHONEX_GATEWAY_* variables unset the
+# worker makes ZERO calls to OpenPhonex Cloud (this compose file does not even
+# pass `--report-health`). Fail-closed: no live calls until
+# REALTIME_LIVE_ENABLED=1 in .env.selfhost.
+
+name: openphonex-gateway-selfhost
+
+services:
+  gateway:
+    build:
+      # Repo root (three levels up from packages/openphonex-gateway/deploy/):
+      # Dockerfile.gateway and packages/ live there in the public repo layout.
+      context: ../../..
+      dockerfile: Dockerfile.gateway
+      args:
+        # Lean image: the Deepgram/Gemini/ElevenLabs cloud pipeline needs no
+        # extras. Leave "local" here instead if you want the local-model
+        # adapters (faster-whisper/numpy) baked in.
+        GATEWAY_EXTRAS: ""
+    image: openphonex-gateway:selfhost
+    container_name: openphonex-gateway
+    env_file:
+      - .env.selfhost
+    environment:
+      # Belt-and-suspenders with `python -u` below: never buffer worker logs.
+      PYTHONUNBUFFERED: "1"
+    # Overrides the image CMD (which additionally passes --report-health; that
+    # flag is a no-op without OPENPHONEX_* env, but standalone self-hosting
+    # does not need it at all). Structured JSON logs go to stderr; the final
+    # --serve-asterisk result JSON goes to stdout; `docker logs` shows both.
+    command:
+      - python
+      - -u
+      - -m
+      - openphonex_gateway.realtime.worker
+      - --serve-asterisk
+      - --serve-health
+    ports:
+      # Worker health/status — published on loopback ONLY. Requires
+      # REALTIME_HEALTH_BIND=0.0.0.0 in .env.selfhost (the in-container
+      # default is 127.0.0.1, which a published port cannot reach).
+      - "127.0.0.1:${GATEWAY_HEALTH_HOST_PORT:-18772}:18772"
+    # RTP needs NO published ports: Asterisk and the gateway exchange
+    # ExternalMedia RTP container-to-container on the shared docker network
+    # (VOICE_RTP_PORT..VOICE_RTP_PORT_END from .env.selfhost).
+    volumes:
+      # Call artifacts (transcripts, latency metrics, recordings).
+      - ./calls:/calls
+      - ./recordings:/recordings
+    networks:
+      asterisk_net:
+        # A FREE address on the Asterisk network — Asterisk sends ExternalMedia
+        # RTP here, so it must be stable across restarts.
+        ipv4_address: ${GATEWAY_STATIC_IP:?set GATEWAY_STATIC_IP in .env.selfhost and pass --env-file .env.selfhost}
+    restart: unless-stopped
+
+networks:
+  asterisk_net:
+    # Your EXISTING Asterisk network (docker network ls / inspect). `external:
+    # true` means compose joins it and never creates a same-named replacement —
+    # creating one would cut the route to the Asterisk container.
+    external: true
+    name: ${ASTERISK_DOCKER_NETWORK:?set ASTERISK_DOCKER_NETWORK in .env.selfhost and pass --env-file .env.selfhost}

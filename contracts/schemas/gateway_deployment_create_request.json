@@ -1,0 +1,80 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gateway_deployment_create_request.json",
+  "title": "POST /v1/gateway-deployments request body (as-built)",
+  "description": "Derived from TelephonyApp.create_gateway_deployment (src/telephony_ai/app.py:9175). organization_id and project_id are the only hard-required keys (KeyError -> 500 today if missing). mode defaults to the deployment model's gateway_mode or 'self_hosted'. charge_wallet defaults to true; the self_hosted_gateway plan has a 0 monthly base so self-hosted creation does not require wallet balance.",
+  "type": "object",
+  "properties": {
+    "organization_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "deployment_model_id": {
+      "type": "string",
+      "enum": [
+        "fully_managed_cloud",
+        "managed_numbers_self_hosted_gateway"
+      ],
+      "description": "Optional. Resolved by resolve_deployment_model (src/telephony_ai/pricing.py). The fully_self_hosted_byo_provider option was removed at M3 (see docs/BYO_DIDWW_DISPOSITION.md)."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "self_hosted",
+        "cloud_hosted"
+      ]
+    },
+    "plan_id": {
+      "type": "string"
+    },
+    "carrier_account_id": {
+      "type": "string",
+      "description": "Defaults to the deployment model's carrier account or 'managed_didww_resale'. Known values: sandbox_fake_provider, managed_didww_resale, byo_didww_account, self_managed_provider."
+    },
+    "provider": {
+      "type": "string",
+      "description": "Provider key for the auto-attached provider account; defaults to 'didww'."
+    },
+    "provider_account_id": {
+      "type": "string",
+      "description": "Attach an existing provider account instead of auto-creating one."
+    },
+    "region": {
+      "type": "string",
+      "description": "Defaults to 'local'."
+    },
+    "status": {
+      "type": "string",
+      "description": "Defaults to 'awaiting_connection' (self_hosted) or 'active' (hosted)."
+    },
+    "public_url": {
+      "type": "string"
+    },
+    "local_status_url": {
+      "type": "string"
+    },
+    "gateway_version": {
+      "type": "string"
+    },
+    "charge_wallet": {
+      "type": "boolean",
+      "description": "Defaults to true. When true and the plan has a monthly base fee, a gateway_monthly usage record is charged to the wallet at creation."
+    },
+    "last_health_status": {
+      "type": "object"
+    },
+    "last_health_at": {
+      "type": "string"
+    },
+    "last_test_result": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "organization_id",
+    "project_id"
+  ]
+}

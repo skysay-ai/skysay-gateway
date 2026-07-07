@@ -1,0 +1,85 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "call_artifact_import_request.json",
+  "title": "POST /v1/call-artifact-imports request body (as-built)",
+  "description": "Derived from TelephonyApp.import_call_artifacts (src/telephony_ai/app.py:13266). SAME-HOST-ONLY: source_path is resolved on the API server's local filesystem (Path(...).expanduser().resolve()); external gateways cannot use this endpoint to push artifacts. This transport is deprecated for external gateways - see the proposed multipart upload endpoint in contracts/gateway-v1.yaml. organization_id and project_id are required unless call_id points at an existing call that carries them.",
+  "type": "object",
+  "properties": {
+    "source_path": {
+      "type": "string",
+      "description": "Local filesystem path (file or directory) on the API host. Must exist."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "folder_per_call",
+        "file_per_call"
+      ],
+      "description": "Defaults to auto."
+    },
+    "organization_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "call_id": {
+      "type": "string",
+      "description": "Attach artifacts to an existing call instead of creating an imported call."
+    },
+    "provider_call_id": {
+      "type": "string",
+      "description": "Defaults to a content-hash id (artifact-import-...); used for idempotency."
+    },
+    "label": {
+      "type": "string"
+    },
+    "direction": {
+      "type": "string",
+      "description": "Defaults to 'imported'."
+    },
+    "from_phone_number": {
+      "type": "string"
+    },
+    "to_phone_number": {
+      "type": "string"
+    },
+    "country": {
+      "type": "string",
+      "description": "Defaults to 'IMPORT'."
+    },
+    "recipient_type": {
+      "type": "string",
+      "description": "Defaults to imported_demo."
+    },
+    "purpose": {
+      "type": "string",
+      "description": "Defaults to imported_recording_demo."
+    },
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_endpoint_id": {
+      "type": "string"
+    },
+    "estimated_cost_minor": {
+      "type": "integer"
+    },
+    "duration_seconds": {
+      "type": "number"
+    },
+    "recording_consent_state": {
+      "type": "string",
+      "description": "Defaults to imported_demo_review_required."
+    },
+    "retention_days": {
+      "type": "integer",
+      "description": "Defaults to 90."
+    }
+  },
+  "required": [
+    "source_path"
+  ]
+}

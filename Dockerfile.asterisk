@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Unigox OÜ
+#
+# OpenPhonex Gateway — Asterisk image.
+#
+# IMPORTANT LICENSING NOTE: Asterisk is licensed under GPLv2 (with the OpenSSL
+# linking exception). This Dockerfile does NOT bundle, fork, modify, or link
+# against Asterisk. It installs Asterisk from the operator's own Ubuntu package
+# repository at the operator's build time, so the operator obtains Asterisk
+# directly from upstream under GPLv2. OpenPhonex distributes zero GPL code; this
+# file is only build instructions (Apache-2.0). See NOTICE + THIRD_PARTY_LICENSES.md.
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates curl iproute2 procps gettext-base \
+    && add-apt-repository -y universe \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends asterisk asterisk-modules \
+    && rm -rf /var/lib/apt/lists/*
+
+# Render entrypoint. The configs/asterisk/*.template files are mounted read-only
+# at /etc/asterisk/templates by docker-compose.gateway.yml; at start we render
+# them (restricted `envsubst`, so Asterisk's own ${EXTEN}/${CHANNEL} dialplan
+# variables survive) over the distro's default /etc/asterisk. The quoted heredoc
+# writes the ${...} references LITERALLY into the script (no build-time expansion).
+RUN cat > /usr/local/bin/openphonex-render-asterisk <<'EOF' \
+    && chmod +x /usr/local/bin/openphonex-render-asterisk
+#!/usr/bin/env bash
+set -e
+if [ -d /etc/asterisk/templates ]; then
+  for f in /etc/asterisk/templates/*; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    case "$base" in *.md) continue ;; esac
+    out="/etc/asterisk/${base%.template}"
+    envsubst '$SIP_TRUNK_USERNAME $SIP_TRUNK_PASSWORD $SIP_PROVIDER_HOST $PUBLIC_IP $ARI_USER $ARI_PASSWORD' < "$f" > "$out"
+  done
+fi
+exec asterisk -f -vvv
+EOF
+
+# Nothing secret is baked into this image; secrets arrive at run time via env.
+CMD ["/usr/local/bin/openphonex-render-asterisk"]

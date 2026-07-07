@@ -1,0 +1,53 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trial_call_route_request.json",
+  "title": "POST /v1/trial-calls/route request body (as-built)",
+  "description": "Derived from TelephonyApp.route_trial_inbound_call / _complete_trial_inbound_call (src/telephony_ai/app.py:8280, 8656). 'pin' is required and must match a trial call in status ready/ringing/media_started. live_media defaults to false; when false the call is simulated (media_started) and demo artifacts are generated.",
+  "type": "object",
+  "properties": {
+    "pin": {
+      "type": "string"
+    },
+    "from_phone_number": {
+      "type": "string",
+      "description": "Aliases: from_e164, caller_phone_number. Defaults to +15550009999."
+    },
+    "from_e164": {
+      "type": "string"
+    },
+    "caller_phone_number": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string",
+      "description": "Defaults to didww-trial."
+    },
+    "provider_call_id": {
+      "type": "string",
+      "description": "Defaults to trial-{trial_id}."
+    },
+    "country": {
+      "type": "string",
+      "description": "Defaults to US."
+    },
+    "live_media": {
+      "type": "boolean",
+      "description": "Alias: live. Live media is gated by OPENPHONEX_LIVE_CALLS_ENABLED / OPENPHONEX_VOICE_LIVE_ENABLED (+ REALTIME_LIVE_ENABLED for realtime)."
+    },
+    "live": {
+      "type": "boolean"
+    },
+    "media_pipeline": {
+      "type": "string",
+      "enum": [
+        "legacy",
+        "realtime"
+      ],
+      "description": "Aliases accepted by _requested_media_pipeline; realtime_media/low_latency_realtime booleans also force realtime."
+    }
+  },
+  "required": [
+    "pin"
+  ]
+}

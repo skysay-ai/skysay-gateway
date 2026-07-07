@@ -1,0 +1,89 @@
+; SPDX-License-Identifier: Apache-2.0
+; SPDX-FileCopyrightText: 2026 Unigox OÜ
+;
+; OpenPhonex Gateway — PJSIP trunk template (topology B: managed numbers from
+; OpenPhonex Cloud + self-hosted gateway). This is CONFIGURATION DATA authored
+; by OpenPhonex; it is not Asterisk source and does not link against Asterisk.
+; Asterisk itself is obtained by the operator from upstream under GPLv2 (see
+; NOTICE + THIRD_PARTY_LICENSES.md). Every secret is a ${ENV} reference resolved
+; at render/run time from .env.gateway — no live credential is ever committed.
+;
+; Referenced environment variables (set in .env.gateway):
+;   SIP_TRUNK_USERNAME  — SIP trunk auth username (provisioned by Cloud/operator)
+;   SIP_TRUNK_PASSWORD  — SIP trunk auth password (provisioned by Cloud/operator)
+;   SIP_PROVIDER_HOST   — provider SIP host, e.g. sip.example-provider.com
+;   PUBLIC_IP           — this gateway's public/NAT signalling+media address
+
+[global]
+type=global
+user_agent=openphonex-gateway
+endpoint_identifier_order=ip,username,anonymous
+
+[transport-udp]
+type=transport
+protocol=udp
+bind=0.0.0.0:5060
+external_signaling_address=${PUBLIC_IP}
+external_media_address=${PUBLIC_IP}
+local_net=10.0.0.0/8
+local_net=172.16.0.0/12
+local_net=192.168.0.0/16
+local_net=100.64.0.0/10
+
+[trunk-auth]
+type=auth
+auth_type=userpass
+username=${SIP_TRUNK_USERNAME}
+password=${SIP_TRUNK_PASSWORD}
+
+[trunk-aor]
+type=aor
+contact=sip:${SIP_PROVIDER_HOST}
+qualify_frequency=60
+
+[trunk-inbound]
+type=endpoint
+transport=transport-udp
+context=from-provider
+disallow=all
+allow=ulaw,alaw
+aors=trunk-aor
+outbound_auth=trunk-auth
+from_user=${SIP_TRUNK_USERNAME}
+from_domain=${SIP_PROVIDER_HOST}
+direct_media=no
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes
+
+[trunk-reg]
+type=registration
+transport=transport-udp
+outbound_auth=trunk-auth
+server_uri=sip:${SIP_PROVIDER_HOST}
+client_uri=sip:${SIP_TRUNK_USERNAME}@${SIP_PROVIDER_HOST}
+contact_user=${SIP_TRUNK_USERNAME}
+expiration=60
+retry_interval=10
+forbidden_retry_interval=60
+line=yes
+endpoint=trunk-inbound
+
+[trunk-identify]
+type=identify
+endpoint=trunk-inbound
+match=${SIP_PROVIDER_HOST}
+
+[trunk-outbound]
+type=endpoint
+transport=transport-udp
+context=outbound
+disallow=all
+allow=ulaw,alaw
+aors=trunk-aor
+outbound_auth=trunk-auth
+from_domain=${SIP_PROVIDER_HOST}
+direct_media=no
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes

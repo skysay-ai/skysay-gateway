@@ -1,0 +1,27 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "worker_job_create_request.json",
+  "title": "POST /v1/worker-jobs request body (as-built)",
+  "description": "Derived from the /v1/worker-jobs POST handler (src/telephony_ai/server.py:1583-1586) and TelephonyApp.create_worker_job (src/telephony_ai/app.py:6028). 'kind' is required (payload['kind'] KeyError otherwise). 'kind' is a free-form string today - there is NO kind allowlist enforcement (the proposed worker_jobs:enqueue scope adds one). organization_id is optional; when present it is checked against the caller's organization and risk controls.",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "description": "Job kind. Kinds used by the codebase include: call.outbound_originate, call.inbound_route, call.inbound_bridge, call.inbound_phone_server_bridge, call.inbound_pstn_forward, call.artifact_import, provider.sync. Unknown kinds are accepted and stored."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Arbitrary job payload; defaults to {}."
+    },
+    "organization_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "kind"
+  ]
+}

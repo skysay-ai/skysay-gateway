@@ -1,0 +1,117 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gateway_health_report_request.json",
+  "title": "POST /v1/gateway-deployments/{id}/health-report request body (as-built)",
+  "description": "Derived from TelephonyApp.record_gateway_health_report and _named_checks (src/telephony_ai/app.py:9299, 10064). Every field is optional; the report is stored verbatim (plus derived 'version' and 'checks') into last_health_status. Named checks may arrive either as top-level keys, as a 'checks' object keyed by name, or as a 'checks' array of {name, ...} items. Recognized check names: api_health, media_health, voice_gateway_health, realtime_worker_health, asterisk_status, storage.",
+  "type": "object",
+  "properties": {
+    "checks": {
+      "description": "Object keyed by check name, or array of {name: ..., ok: ...} objects.",
+      "anyOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      ]
+    },
+    "api_health": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "body": {
+          "type": "object"
+        }
+      }
+    },
+    "media_health": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "body": {
+          "type": "object"
+        }
+      }
+    },
+    "voice_gateway_health": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "body": {
+          "type": "object"
+        }
+      }
+    },
+    "realtime_worker_health": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "body": {
+          "type": "object"
+        }
+      }
+    },
+    "asterisk_status": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    "last_test_result": {
+      "type": "object",
+      "description": "Alias: test_result. Non-object values are replaced with {ok: false, error: invalid_test_result}."
+    },
+    "test_result": {
+      "type": "object"
+    },
+    "version": {
+      "type": "string",
+      "description": "Falls back to gateway_version, then voice/media body version, then server __version__."
+    },
+    "gateway_version": {
+      "type": "string"
+    },
+    "public_url": {
+      "type": "string",
+      "description": "Persisted onto the deployment row when present."
+    },
+    "local_status_url": {
+      "type": "string"
+    },
+    "reported_at": {
+      "type": "string",
+      "description": "Stored as last_health_at; defaults to server time."
+    },
+    "realtime_validation": {
+      "type": "object",
+      "description": "SCH-191 realtime validation report; compacted into gateway_health.realtime.validation."
+    },
+    "validation_report": {
+      "type": "object"
+    }
+  },
+  "required": []
+}

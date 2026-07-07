@@ -1,0 +1,17 @@
+; SPDX-License-Identifier: Apache-2.0
+; SPDX-FileCopyrightText: 2026 Unigox OÜ
+;
+; OpenPhonex Gateway — Asterisk REST Interface (ARI) template. The gateway
+; worker talks to Asterisk ONLY over this HTTP/WebSocket API (a network
+; boundary, not linking). ARI is bound to the compose network and must NEVER be
+; exposed publicly. The password is a ${ENV} reference resolved from
+; .env.gateway (ARI_USER / ARI_PASSWORD).
+
+[general]
+enabled = yes
+pretty = yes
+
+[${ARI_USER}]
+type = user
+read_only = no
+password = ${ARI_PASSWORD}

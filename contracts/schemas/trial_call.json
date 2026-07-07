@@ -1,0 +1,90 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trial_call.json",
+  "title": "Trial call resource (as-built)",
+  "description": "Derived from the trial_calls table (src/telephony_ai/store.py:587) and TelephonyApp._decorate_trial_call_row (src/telephony_ai/app.py:8260). trial_phone_number and demo_number are aliases of demo_phone_number. 'call' is attached only when call_id is set (after route/simulate).",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^trial_"
+    },
+    "organization_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "agent_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "agent_endpoint_id": {
+      "type": "string"
+    },
+    "demo_phone_number": {
+      "type": "string"
+    },
+    "trial_phone_number": {
+      "type": "string"
+    },
+    "demo_number": {
+      "type": "string"
+    },
+    "pin": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "description": "Values written by the code: ready, ringing, media_started, succeeded."
+    },
+    "max_free_seconds": {
+      "type": "integer"
+    },
+    "expires_at": {
+      "type": "string"
+    },
+    "call_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "result": {
+      "type": "object"
+    },
+    "instructions": {
+      "type": "object"
+    },
+    "call": {
+      "type": "object",
+      "description": "Full call resource; present only after the trial routed to a call."
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "organization_id",
+    "project_id",
+    "agent_endpoint_id",
+    "demo_phone_number",
+    "trial_phone_number",
+    "demo_number",
+    "pin",
+    "status",
+    "max_free_seconds",
+    "expires_at",
+    "result",
+    "instructions",
+    "created_at",
+    "updated_at"
+  ]
+}

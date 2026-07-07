@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Unigox OÜ
+#
+# OpenPhonex Gateway image: the control-plane-free media gateway + realtime
+# STT/LLM/TTS pipeline, with the optional local-model extras. Builds only
+# first-party Apache-2.0 packages plus pip/apt dependencies obtained from
+# upstream. No OpenPhonex Cloud code is present in this image.
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# ffmpeg: optional audio transcode (external binary, not bundled/linked).
+# piper: optional local TTS engine (external binary).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install the two first-party packages. Copy the package trees first so the
+# layer caches on source changes only. GATEWAY_EXTRAS selects the optional
+# extras baked into the image: the default "local" keeps the historical
+# full image (local-model adapters); build with --build-arg GATEWAY_EXTRAS=""
+# for the lean image (the Deepgram/Gemini/ElevenLabs cloud pipeline needs no
+# extras) — that is what packages/openphonex-gateway/deploy/
+# docker-compose.selfhost.yml does.
+ARG GATEWAY_EXTRAS=local
+COPY packages/openphonex-common ./packages/openphonex-common
+COPY packages/openphonex-gateway ./packages/openphonex-gateway
+RUN pip install ./packages/openphonex-common "./packages/openphonex-gateway${GATEWAY_EXTRAS:+[${GATEWAY_EXTRAS}]}"
+
+# Optional: drop a Piper voice model into /models at build or run time.
+# Example (run time): mount a volume at /models with en_US-lessac-medium.onnx.
+RUN mkdir -p /models
+
+# 18772 = local status/health; RTP media pool 10020-10039/udp.
+EXPOSE 18772
+EXPOSE 10020-10039/udp
+
+# Fail-closed: REALTIME_LIVE_ENABLED must be set to 1 in the environment to place
+# real calls. Health + Asterisk serving + periodic health reporting are on.
+CMD ["python", "-m", "openphonex_gateway.realtime.worker", \
+     "--serve-health", "--serve-asterisk", "--report-health"]

@@ -1,0 +1,69 @@
+# OpenPhonex Gateway
+
+> OpenPhonex Gateway — a self-hostable media gateway (RTP transport + realtime STT/LLM/TTS pipeline + standalone ARI originate CLI) that registers to OpenPhonex Cloud on a scoped per-gateway token. Numbers, KYB/compliance, billing, and abuse policy stay in Cloud (topology B: managed numbers + self-hosted gateway). No cloud secrets ever live on the gateway.
+
+## Repository map
+
+- [openphonex-gateway package](packages/openphonex-gateway/): media server, RTP transport, realtime pipeline, provider registry (incl. local adapters), `openphonex-originate` CLI.
+- [openphonex-common package](packages/openphonex-common/): control-plane-free shared config + runtime helpers.
+- [Gateway↔Cloud contract](contracts/gateway-v1.yaml): OpenAPI v1.0.0, stable.
+- [JSON Schemas](contracts/schemas/): request/response bodies for the stable surface.
+- [Asterisk config templates](configs/asterisk/): secret-free, Apache-2.0 configuration data.
+- [Topology-B quickstart](docker-compose.gateway.yml): self-contained compose (gateway + Asterisk).
+- [Self-host quickstart](packages/openphonex-gateway/deploy/SELFHOST.md): gateway-only container joining an EXISTING Asterisk docker network (standalone; no Cloud calls).
+- [README](README.md): quickstart and overview.
+
+## The contract (gateway ↔ Cloud)
+
+The exact surface is [contracts/gateway-v1.yaml](contracts/gateway-v1.yaml) (v1.0.0 stable) plus [contracts/schemas/](contracts/schemas/). The four M3 as-built endpoints the gateway uses:
+
+- `POST /v1/gateway-deployments/{id}/tokens` — mint a per-gateway `tgw_` token (shown once).
+- `POST /v1/gateway-deployments/{id}/tokens/rotate` — rotate/revoke the token.
+- `GET /v1/gateway-deployments/{id}/number-rules` — routing (ETag / `If-None-Match`).
+- `POST /v1/calls/{id}/artifacts` — upload call artifacts (multipart).
+
+Narrowed scope set: `gateways:report, worker_jobs:enqueue, artifacts:upload, number-rules:read`. Auth: `Authorization: Bearer tgw_...` from `OPENPHONEX_GATEWAY_API_TOKEN`. The gateway holds ONLY the `tgw_` token — never an org `tapi_` key, never a provider secret.
+
+## Audio contract
+
+`pcm_s16le_8000_mono` — 16-bit little-endian PCM, 8 kHz, mono. No negotiation.
+
+## Asterisk channel-variable protocol
+
+Only `OPENPHONEX_*`-prefixed channel variables are read; values are sanitized and truncated. Always set: `OPENPHONEX_CALL_DIRECTION` and `OPENPHONEX_ORGANIZATION_ID`.
+
+## Provider plugin contract
+
+`ProviderSpec` in [registry.py](packages/openphonex-gateway/openphonex_gateway/realtime/registry.py) is the stable third-party plugin surface. Advertise a provider three ways:
+
+- an entry point in group `openphonex.stt` / `openphonex.llm` / `openphonex.tts`;
+- a dotted-path env value, e.g. `REALTIME_STT_PROVIDER=myco.stt:Spec`;
+- a module attribute `PROVIDER_SPEC`.
+
+Shipped local adapters and their env:
+
+- faster-whisper STT — `REALTIME_STT_PROVIDER=faster_whisper`, `REALTIME_LOCAL_STT_MODEL`, `REALTIME_LOCAL_STT_DEVICE`, `REALTIME_LOCAL_STT_COMPUTE_TYPE`.
+- OpenAI-compatible LLM (aliases `ollama` / `vllm` / `local_llm`) — `REALTIME_LLM_PROVIDER=ollama`, `REALTIME_LLM_BASE_URL`, `REALTIME_LLM_MODEL`.
+- Piper + Kokoro TTS — `REALTIME_TTS_PROVIDER=piper`, `REALTIME_TTS_MODEL`, `REALTIME_TTS_PIPER_BIN`.
+
+Optional extras: `openphonex-gateway[local-stt|local-tts|local-llm|local]`.
+
+## Entry points / commands
+
+- `python -m openphonex_gateway.realtime.worker --status | --serve-asterisk --serve-health | --report-health-once`
+- Offline, no-provider smokes: `--offline-synthetic-call`, `--offline-recorded-audio`.
+- `openphonex-originate <e164> --dry-run` — print the ARI originate payload without placing a call.
+
+## Safety boundaries
+
+- Live calls are fail-closed behind `REALTIME_LIVE_ENABLED` (+ optional `REALTIME_REQUIRE_OPERATOR_APPROVAL`).
+- Asterisk ARI is never exposed publicly (compose network only).
+- The gateway holds only the scoped `tgw_` token; no cloud secrets on the gateway.
+
+## More
+
+- [CONTRIBUTING](CONTRIBUTING.md)
+- [SECURITY](SECURITY.md)
+- [LICENSE](LICENSE)
+- [TRADEMARK](TRADEMARK.md)
+- [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES.md)
