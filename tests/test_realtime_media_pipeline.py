@@ -1271,6 +1271,13 @@ class RealtimeMediaPipelineTests(unittest.TestCase):
         ]
         self.assertEqual(list(speakable_chunks(chunks)), ["Tere!", "Ma saan aidata broneeringuga."])
 
+    def test_speakable_chunks_does_not_split_at_commas(self) -> None:
+        chunks = [
+            TextChunk("Jah, ", is_final=False),
+            TextChunk("ma kuulen sind hästi.", is_final=True),
+        ]
+        self.assertEqual(list(speakable_chunks(chunks)), ["Jah, ma kuulen sind hästi."])
+
     def test_speakable_chunks_emits_word_boundary_soft_first_phrase_without_punctuation(self) -> None:
         chunks = [
             TextChunk("one two three four five six seven ", is_final=False),

@@ -327,7 +327,9 @@ class RealtimeWorkerConfig:
     semantic_endpointing_min_words: int = 2
     semantic_endpointing_min_chars: int = 6
     semantic_endpointing_terminal_punctuation: tuple[str, ...] = (".", "!", "?")
+    accept_interim_on_rms_endpoint: bool = False
     max_pending_phrases: int = 4
+    tts_rtp_prebuffer_ms: int = 0
     idle_timeout_seconds: float = 30.0
     fake_transcript: str = "Tere, soovin aega broneerida."
     fake_reply: str = "Tere! Mis auto mudeliga tulete?"
@@ -425,7 +427,12 @@ class RealtimeWorkerConfig:
             semantic_endpointing_terminal_punctuation=_semantic_punctuation_env(
                 os.environ.get("REALTIME_SEMANTIC_ENDPOINTING_TERMINAL_PUNCTUATION")
             ),
+            accept_interim_on_rms_endpoint=env_flag(
+                os.environ.get("REALTIME_ACCEPT_INTERIM_ON_RMS_ENDPOINT"),
+                default=False,
+            ),
             max_pending_phrases=max(1, int(os.environ.get("REALTIME_MAX_PENDING_PHRASES", "4"))),
+            tts_rtp_prebuffer_ms=max(0, int(os.environ.get("REALTIME_TTS_RTP_PREBUFFER_MS", "0"))),
             idle_timeout_seconds=float(os.environ.get("REALTIME_IDLE_TIMEOUT_SECONDS", "30")),
             fake_transcript=os.environ.get("REALTIME_FAKE_TRANSCRIPT", "Tere, soovin aega broneerida."),
             fake_reply=os.environ.get("REALTIME_FAKE_REPLY", "Tere! Mis auto mudeliga tulete?"),
@@ -672,6 +679,7 @@ class RealtimeWorkerConfig:
                 "port": self.rtp_port,
                 "port_end": self.resolved_rtp_port_end(),
                 "port_count": len(self.rtp_ports()),
+                "tts_prebuffer_ms": self.tts_rtp_prebuffer_ms,
             },
             "health": {"bind": self.health_bind, "port": self.health_port},
             "provider_mode": self.provider_mode,
@@ -735,6 +743,7 @@ class RealtimeWorkerConfig:
                 "min_words": self.semantic_endpointing_min_words,
                 "min_chars": self.semantic_endpointing_min_chars,
                 "terminal_punctuation": "".join(self.semantic_endpointing_terminal_punctuation),
+                "accept_interim_on_rms_endpoint": self.accept_interim_on_rms_endpoint,
             },
             "max_pending_phrases": self.max_pending_phrases,
             "idle_timeout_seconds": self.idle_timeout_seconds,
@@ -2220,13 +2229,14 @@ class RealtimeMediaWorker:
             stt=stt,
             llm=llm,
             tts=tts,
-            rtp_sender=PacedRtpSender(send_packet),
+            rtp_sender=PacedRtpSender(send_packet, prebuffer_ms=config.tts_rtp_prebuffer_ms),
             recorder=recorder,
             detector=RmsTurnDetector(TurnDetectionConfig(silence_hold_ms=config.silence_hold_ms, min_speech_ms=config.min_speech_ms)),
             metrics=metrics,
             barge_in_frame_reader=barge_in_frame_reader,
             barge_in_config=BargeInConfig(speech_rms=config.barge_in_speech_rms),
             semantic_endpointing=SemanticEndpointDetector(config.semantic_endpoint_config()),
+            accept_interim_on_rms_endpoint=config.accept_interim_on_rms_endpoint,
             max_pending_phrases=config.max_pending_phrases,
             llm_fallback=self._llm_fallback_config(llm, config=config),
         )

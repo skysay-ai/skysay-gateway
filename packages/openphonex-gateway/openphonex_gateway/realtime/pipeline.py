@@ -123,6 +123,7 @@ class RealtimeMediaPipeline:
         max_pending_phrases: int = 4,
         semantic_endpointing: SemanticEndpointDetector | None = None,
         llm_fallback: LLMFallbackConfig | None = None,
+        accept_interim_on_rms_endpoint: bool = False,
     ):
         self.stt = stt
         self.llm = llm
@@ -144,6 +145,7 @@ class RealtimeMediaPipeline:
         self._assistant_context_parts: list[str] = []
         self.max_pending_phrases = max(1, int(max_pending_phrases))
         self._caller_speech_active = False
+        self.accept_interim_on_rms_endpoint = accept_interim_on_rms_endpoint
 
     def consume_inbound_until_turn(self, frames: Iterable[AudioFrame]) -> CapturedTurn | None:
         turn_index = self._turn_index + 1
@@ -195,6 +197,24 @@ class RealtimeMediaPipeline:
                             finalization_skipped=True,
                         )
                         continue
+                    if endpoint_source == "rms_silence" and self.accept_interim_on_rms_endpoint:
+                        provisional = self._interim_endpoint_transcript(transcript_events)
+                        if provisional is not None:
+                            transcript_events.append(provisional)
+                            self._observe_transcript_event(provisional)
+                            self.metrics.mark(
+                                "stt_interim_promoted_to_final",
+                                text_len=len(provisional.text.strip()),
+                                source=endpoint_source,
+                            )
+                            self.metrics.mark(
+                                "user_endpoint_detected",
+                                at=candidate_endpoint.at,
+                                end_ms=turn.end_ms,
+                                speech_ms=turn.speech_ms,
+                                source="rms_silence_interim",
+                            )
+                            return CapturedTurn(self._combine_detected_turns(pending_turns), transcript_events)
                     endpoint_events = list(stt_session.end_input(turn))
                     transcript_events.extend(endpoint_events)
                     if self._should_accept_endpointed_transcript(endpoint_source, transcript_events):
@@ -678,6 +698,27 @@ class RealtimeMediaPipeline:
 
     def _has_transcript_text(self, events: Iterable[TranscriptEvent]) -> bool:
         return any(bool(event.text.strip()) for event in events)
+
+    def _interim_endpoint_transcript(self, events: Iterable[TranscriptEvent]) -> TranscriptEvent | None:
+        latest: TranscriptEvent | None = None
+        for event in events:
+            if event.text.strip():
+                latest = event
+        if latest is None or latest.is_final:
+            return None
+        text = " ".join(latest.text.strip().split())
+        if not text:
+            return None
+        metadata = dict(latest.metadata) if isinstance(latest.metadata, dict) else {}
+        metadata["semantic_endpoint"] = True
+        metadata["provisional_from_interim"] = True
+        return TranscriptEvent(
+            text,
+            is_final=True,
+            language=latest.language,
+            confidence=latest.confidence,
+            metadata=metadata,
+        )
 
     def _is_explicit_semantic_endpoint(self, event: TranscriptEvent) -> bool:
         metadata = event.metadata if isinstance(event.metadata, dict) else {}

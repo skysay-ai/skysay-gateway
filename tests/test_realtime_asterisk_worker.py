@@ -196,6 +196,7 @@ class RealtimeAsteriskWorkerTests(unittest.TestCase):
                 "ASTERISK_ARI_PASSWORD": "super-secret",
                 "REALTIME_PROVIDER_MODE": "fake",
                 "REALTIME_MAX_PENDING_PHRASES": "2",
+                "REALTIME_TTS_RTP_PREBUFFER_MS": "240",
                 "REALTIME_SEMANTIC_ENDPOINTING_ENABLED": "0",
                 "REALTIME_SEMANTIC_ENDPOINTING_MIN_WORDS": "3",
                 "REALTIME_SEMANTIC_ENDPOINTING_MIN_CHARS": "12",
@@ -208,6 +209,7 @@ class RealtimeAsteriskWorkerTests(unittest.TestCase):
         encoded = json.dumps(status)
         self.assertEqual(status["config"]["rtp"]["port"], 12042)
         self.assertEqual(status["config"]["rtp"]["port_end"], 12061)
+        self.assertEqual(status["config"]["rtp"]["tts_prebuffer_ms"], 240)
         self.assertEqual(status["capacity"]["effective_call_capacity"], 20)
         self.assertEqual(status["config"]["health"]["port"], 12043)
         self.assertEqual(status["config"]["provider_mode"], "fake")
@@ -219,6 +221,7 @@ class RealtimeAsteriskWorkerTests(unittest.TestCase):
                 "min_words": 3,
                 "min_chars": 12,
                 "terminal_punctuation": ".!",
+                "accept_interim_on_rms_endpoint": False,
             },
         )
         self.assertNotIn("super-secret", encoded)

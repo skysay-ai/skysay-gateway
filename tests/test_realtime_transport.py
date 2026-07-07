@@ -61,6 +61,38 @@ class RealtimeTransportTests(unittest.TestCase):
         self.assertEqual(len(packets), 1)
         self.assertTrue(state["closed"])
 
+    def test_rtp_sender_prebuffers_before_first_packet(self) -> None:
+        packets: list[bytes] = []
+        metrics = CallMetrics()
+        state = {"requested_chunks": 0, "requested_at_first_send": 0}
+
+        def chunks():
+            for hz in (440, 660, 880):
+                state["requested_chunks"] += 1
+                yield AudioFrame.tone(20, hz=hz).pcm16
+
+        def send_packet(packet: bytes) -> None:
+            if not packets:
+                state["requested_at_first_send"] = state["requested_chunks"]
+            packets.append(packet)
+
+        sender = PacedRtpSender(
+            send_packet,
+            prebuffer_ms=40,
+            clock_sleep=lambda _seconds: None,
+        )
+
+        sent = sender.send_pcm16_stream(chunks(), metrics=metrics)
+
+        self.assertEqual(sent, 3)
+        self.assertEqual(len(packets), 3)
+        self.assertGreaterEqual(state["requested_at_first_send"], 2)
+        prebuffer = metrics.first("rtp_prebuffer_ready")
+        self.assertIsNotNone(prebuffer)
+        assert prebuffer is not None
+        self.assertEqual(prebuffer.attrs["target_ms"], 40)
+        self.assertGreaterEqual(prebuffer.attrs["actual_ms"], 40)
+
     def test_rtp_receive_stats_track_loss_jitter_duplicates_and_reordering(self) -> None:
         packets: list[bytes] = []
         sender = PacedRtpSender(

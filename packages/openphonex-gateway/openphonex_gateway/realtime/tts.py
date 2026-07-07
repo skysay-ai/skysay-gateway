@@ -27,7 +27,7 @@ def speakable_chunks(
     for chunk in chunks:
         buffer += chunk.text
         while True:
-            match = re.search(r"([.!?]\s+|,\s+)", buffer)
+            match = re.search(r"([.!?]\s+)", buffer)
             phrase_end: int | None = None
             if match and (match.end() >= min_chars or chunk.is_final):
                 phrase_end = match.end()

@@ -133,11 +133,13 @@ class PacedRtpSender:
         *,
         state: RtpSendState | None = None,
         packet_ms: int = 20,
+        prebuffer_ms: int = 0,
         clock_sleep: Callable[[float], None] = time.sleep,
     ):
         self.send_packet = send_packet
         self.state = state or RtpSendState()
         self.packet_ms = packet_ms
+        self.prebuffer_ms = max(0, int(prebuffer_ms))
         self.clock_sleep = clock_sleep
 
     def send_pcm16_stream(
@@ -149,47 +151,69 @@ class PacedRtpSender:
         metrics: CallMetrics | None = None,
     ) -> int:
         frame_samples = max(1, int(sample_rate * self.packet_ms / 1000))
+        frame_bytes = frame_samples * 2
         buffered = b""
         packets = 0
         cancelled_by_token = False
         iterator = iter(chunks)
+        source_exhausted = False
         try:
-            while True:
+            prebuffer_frames = 0
+            if self.prebuffer_ms > 0:
+                prebuffer_frames = max(1, (self.prebuffer_ms + self.packet_ms - 1) // self.packet_ms)
+            prebuffer_target_bytes = prebuffer_frames * frame_bytes
+            while prebuffer_target_bytes and len(buffered) < prebuffer_target_bytes:
                 if cancellation and cancellation.cancelled:
                     cancelled_by_token = True
-                    break
+                    return packets
                 try:
                     chunk = next(iterator)
                 except StopIteration:
+                    source_exhausted = True
                     break
                 if not isinstance(chunk, bytes):
                     raise TypeError("RTP PCM chunks must be bytes")
                 buffered += chunk
-                usable = (len(buffered) // 2) * 2
-                if usable != len(buffered):
-                    buffered, remainder = buffered[:usable], buffered[usable:]
-                else:
-                    remainder = b""
-                offset = 0
-                frame_bytes = frame_samples * 2
-                while offset + frame_bytes <= len(buffered):
-                    if cancellation and cancellation.cancelled:
-                        cancelled_by_token = True
-                        return packets
-                    payload_pcm = buffered[offset : offset + frame_bytes]
-                    self._send_one(payload_pcm)
-                    packets += 1
-                    if packets == 1 and metrics:
-                        first_rtp = metrics.mark("first_rtp_packet_sent", bytes=len(payload_pcm), packet_ms=self.packet_ms, sample_rate=sample_rate)
-                        metrics.mark(
-                            "caller_hears_first_audio_estimate",
-                            at=first_rtp.at + (self.packet_ms / 1000.0),
-                            basis="first_rtp_packet_sent",
-                            packet_ms=self.packet_ms,
-                        )
-                    self.clock_sleep(self.packet_ms / 1000)
-                    offset += frame_bytes
-                buffered = buffered[offset:] + remainder
+            if prebuffer_target_bytes and metrics:
+                actual_ms = round((len(buffered) // 2) / max(1, sample_rate) * 1000, 3)
+                metrics.mark(
+                    "rtp_prebuffer_ready",
+                    target_ms=self.prebuffer_ms,
+                    actual_ms=actual_ms,
+                    bytes=len(buffered),
+                    source_exhausted=source_exhausted,
+                )
+            while True:
+                if cancellation and cancellation.cancelled:
+                    cancelled_by_token = True
+                    break
+                while len(buffered) < frame_bytes and not source_exhausted:
+                    try:
+                        chunk = next(iterator)
+                    except StopIteration:
+                        source_exhausted = True
+                        break
+                    if not isinstance(chunk, bytes):
+                        raise TypeError("RTP PCM chunks must be bytes")
+                    buffered += chunk
+                if len(buffered) < frame_bytes:
+                    break
+                if cancellation and cancellation.cancelled:
+                    cancelled_by_token = True
+                    return packets
+                payload_pcm = buffered[:frame_bytes]
+                buffered = buffered[frame_bytes:]
+                self._send_one(payload_pcm)
+                packets += 1
+                if packets == 1 and metrics:
+                    first_rtp = metrics.mark("first_rtp_packet_sent", bytes=len(payload_pcm), packet_ms=self.packet_ms, sample_rate=sample_rate)
+                    metrics.mark(
+                        "caller_hears_first_audio_estimate",
+                        at=first_rtp.at + (self.packet_ms / 1000.0),
+                        basis="first_rtp_packet_sent",
+                        packet_ms=self.packet_ms,
+                    )
+                self.clock_sleep(self.packet_ms / 1000)
             return packets
         finally:
             if cancelled_by_token and metrics:
