@@ -1,0 +1,71 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "call_artifact_import_result.json",
+  "title": "POST /v1/call-artifact-imports response body (as-built)",
+  "description": "Each entry in 'calls' is either an imported set (imported=true with call/recording/artifacts/transcript) or a skipped duplicate (imported=false with reason and call/artifacts).",
+  "type": "object",
+  "properties": {
+    "source_path": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "folder_per_call",
+        "file_per_call"
+      ]
+    },
+    "imported_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "skipped_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "imported": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Present when imported=false: already_imported or call_already_has_recording."
+          },
+          "call": {
+            "type": "object"
+          },
+          "recording": {
+            "type": "object"
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "transcript": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "imported",
+          "call",
+          "artifacts"
+        ]
+      }
+    }
+  },
+  "required": [
+    "source_path",
+    "mode",
+    "imported_count",
+    "skipped_count",
+    "calls"
+  ]
+}

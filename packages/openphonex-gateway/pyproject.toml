@@ -1,0 +1,47 @@
+[project]
+name = "openphonex-gateway"
+version = "0.1.0"
+description = "OpenPhonex media gateway: RTP transport and realtime voice pipeline."
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+    "openphonex-common",
+    # Deepgram live streaming STT transport (openphonex_gateway.realtime.
+    # deepgram_streaming_stt imports `websocket`). A genuine core runtime
+    # dependency — the worker enumerates it in runtime_dependency_status() and
+    # fails closed when the deepgram STT provider is selected without it. Kept
+    # out of the optional [local] extras on purpose so the base install (and the
+    # public gateway-only CI, which installs no extras) can run the Deepgram
+    # provider path. The ARI event WebSocket is a stdlib handshake and needs no
+    # third-party client.
+    "websocket-client>=1.8",
+]
+
+[project.optional-dependencies]
+# Optional local-model provider adapters. Each is lazily imported
+# behind a ProviderSpec, so the core gateway and the test suite never require
+# these. numpy is only used by the internal PCM resample helper for local
+# models (the 8 kHz pipeline edge stays numpy-free without an extra).
+local-stt = ["faster-whisper>=1.0.0", "numpy>=1.24"]
+local-tts = ["numpy>=1.24"]
+local-llm = []
+local = ["faster-whisper>=1.0.0", "numpy>=1.24"]
+# Hosted providers are stdlib urllib/websocket-client only EXCEPT
+# Google STT, whose bidi StreamingRecognize truly needs an SDK. Imported lazily
+# inside the adapter's session/methods so reading PROVIDER_SPEC — and therefore
+# catalog selectability — never requires the SDK (the stdlib REST-with-API-key
+# Google path needs no extra). Claude / OpenAI / ElevenLabs-Scribe / Deepgram-
+# Aura / Cartesia add NO new dependency.
+google-stt = ["google-cloud-speech>=2.21"]
+all = ["faster-whisper>=1.0.0", "numpy>=1.24", "google-cloud-speech>=2.21"]
+
+[project.scripts]
+openphonex-voice-evidence = "openphonex_gateway.realtime.voice_evidence_cli:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["openphonex_gateway", "openphonex_gateway.realtime"]

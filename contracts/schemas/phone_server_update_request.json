@@ -1,0 +1,72 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phone_server_update_request.json",
+  "title": "PATCH /v1/phone-servers/{id} request body (as-built)",
+  "description": "All fields optional; any update resets verification_status to not_tested. sip_uri is recomputed when server_address or port change unless explicitly provided.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "server_address": {
+      "type": "string",
+      "description": "Aliases: address, host."
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "transport": {
+      "type": "string",
+      "enum": [
+        "udp",
+        "tcp",
+        "tls"
+      ]
+    },
+    "auth_mode": {
+      "type": "string",
+      "enum": [
+        "ip_allowlist",
+        "sip_credentials",
+        "ip_allowlist_and_credentials"
+      ]
+    },
+    "username": {
+      "type": "string"
+    },
+    "password": {
+      "type": "string",
+      "description": "Not stored; converted to a password_reference."
+    },
+    "password_reference": {
+      "type": "string"
+    },
+    "allowed_sip_ips": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "Alias: allowed_ips."
+    },
+    "sip_uri": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "required": []
+}

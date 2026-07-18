@@ -1,0 +1,48 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gateway_call_lifecycle_event_request.json",
+  "title": "POST /v1/gateway-deployments/{id}/call-lifecycle-events request body",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string"
+    },
+    "call_id": {
+      "type": "string"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "sip.answered",
+        "room.media_started",
+        "room.media_heartbeat",
+        "room.ended",
+        "sip.ended",
+        "sip.failed",
+        "session.reconciled"
+      ]
+    },
+    "source_component": {
+      "type": "string",
+      "enum": [
+        "livekit_sip",
+        "livekit_room",
+        "livekit_reconciler"
+      ]
+    },
+    "observed_at": {
+      "type": "string"
+    },
+    "details": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "event_id",
+    "call_id",
+    "event_type",
+    "source_component"
+  ],
+  "additionalProperties": false
+}

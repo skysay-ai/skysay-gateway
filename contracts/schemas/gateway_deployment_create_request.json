@@ -1,0 +1,76 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gateway_deployment_create_request.json",
+  "title": "POST /v1/gateway-deployments request body (as-built)",
+  "description": "organization_id and project_id are the only hard-required keys (KeyError -> 500 today if missing). mode defaults to the deployment model's gateway_mode or 'self_hosted'. : gateway deployments carry no fee, so creation never charges the wallet (the legacy charge_wallet flag was removed with the component price book).",
+  "type": "object",
+  "properties": {
+    "organization_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "deployment_model_id": {
+      "type": "string",
+      "enum": [
+        "fully_managed_cloud",
+        "managed_numbers_self_hosted_gateway"
+      ],
+      "description": "Optional. Resolved by resolve_deployment_model. The fully_self_hosted_byo_provider option was removed."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "self_hosted",
+        "cloud_hosted"
+      ]
+    },
+    "plan_id": {
+      "type": "string"
+    },
+    "carrier_account_id": {
+      "type": "string",
+      "description": "Defaults to the deployment model's carrier account or 'managed_didww_resale'. Known values: sandbox_fake_provider, managed_didww_resale, byo_didww_account, self_managed_provider."
+    },
+    "provider": {
+      "type": "string",
+      "description": "Provider key for the auto-attached provider account; defaults to 'didww'."
+    },
+    "provider_account_id": {
+      "type": "string",
+      "description": "Attach an existing provider account instead of auto-creating one."
+    },
+    "region": {
+      "type": "string",
+      "description": "Defaults to 'local'."
+    },
+    "status": {
+      "type": "string",
+      "description": "Defaults to 'awaiting_connection' (self_hosted) or 'active' (hosted)."
+    },
+    "public_url": {
+      "type": "string"
+    },
+    "local_status_url": {
+      "type": "string"
+    },
+    "gateway_version": {
+      "type": "string"
+    },
+    "last_health_status": {
+      "type": "object"
+    },
+    "last_health_at": {
+      "type": "string"
+    },
+    "last_test_result": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "organization_id",
+    "project_id"
+  ]
+}

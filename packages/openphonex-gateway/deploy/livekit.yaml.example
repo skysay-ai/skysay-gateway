@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# OpenPhonex LiveKit self-host — livekit-server config template.
+# Copy to `livekit.yaml` and fill in the key pair. NEVER commit the copy.
+#
+# Shape matches the production voice box: control plane loopback-only on the
+# host network, RTC media on UDP 50000-50020, TCP ICE disabled (wildcard TCP
+# binds would expose the control plane on a host-networked stack).
+#
+# The key/secret pair below is the LiveKit API credential. Generate your own
+# (e.g. `openssl rand -hex 32` for the secret) and use the SAME pair in
+# `sip.yaml` and in `.env.livekit` (LIVEKIT_API_KEY / LIVEKIT_API_SECRET).
+
+port: 7880
+bind_addresses:
+  - 127.0.0.1
+rtc:
+  tcp_port: 0
+  port_range_start: 50000
+  port_range_end: 50020
+  use_external_ip: true
+redis:
+  address: 127.0.0.1:6380
+keys:
+  # <your-livekit-api-key>: <your-livekit-api-secret>
+  changeme-api-key: changeme-api-secret
+room:
+  auto_create: true
+logging:
+  level: info

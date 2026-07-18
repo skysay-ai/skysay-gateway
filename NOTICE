@@ -1,0 +1,42 @@
+OpenPhonex Gateway
+Copyright 2026 Unigox OÜ / Artur Schaback
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this software except in compliance with the License. You may obtain a copy of
+the License in the accompanying LICENSE file or at
+http://www.apache.org/licenses/LICENSE-2.0.
+
+This product includes software developed by Unigox OÜ.
+
+--------------------------------------------------------------------------------
+Third-party attribution (summary)
+--------------------------------------------------------------------------------
+
+The OpenPhonex Gateway depends on third-party components at runtime. None of the
+copyleft components below are bundled, forked, modified, or redistributed by
+this project; they are obtained by the operator from their respective upstreams.
+See THIRD_PARTY_LICENSES.md for the full enumeration and license texts.
+
+  - faster-whisper (MIT) — optional local STT adapter
+  - numpy (BSD-3-Clause) — optional PCM resample helper for local models
+  - Piper (MIT) — optional local TTS engine (invoked as an external binary)
+  - Kokoro (Apache-2.0) — optional local TTS engine
+  - websocket-client (Apache-2.0) — provider streaming transport
+  - ffmpeg (LGPL/GPL) — NOT bundled; invoked as an external binary if present
+
+The self-host stack additionally runs the following components as separate
+container images / pip packages obtained by the operator directly from their
+upstreams (none are bundled or redistributed by this repository): LiveKit
+server, LiveKit SIP, and the livekit-agents framework with its provider
+plugins (Apache-2.0), and Redis (obtained by the operator from the official
+upstream image under its own license).
+
+--------------------------------------------------------------------------------
+Trademarks
+--------------------------------------------------------------------------------
+
+"OpenPhonex" and "Telephony AI" and associated logos are trademarks of
+Unigox OÜ and are NOT licensed under the Apache License (see Apache-2.0 §6 and
+TRADEMARK.md). "LiveKit", "Redis", "DIDWW", "Deepgram", "Gemini", "ElevenLabs",
+"Ollama", "Piper", "Kokoro", and "vLLM" are trademarks of their respective
+owners and are used here descriptively only.

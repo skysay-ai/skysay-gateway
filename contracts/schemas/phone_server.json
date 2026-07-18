@@ -1,0 +1,117 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phone_server.json",
+  "title": "Phone server resource (as-built)",
+  "description": "password_reference is stripped from responses and replaced with password_set. phone_server_id is an alias of id.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "phone_server_id": {
+      "type": "string"
+    },
+    "organization_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "description": "unverified until tested; test sets active."
+    },
+    "server_address": {
+      "type": "string"
+    },
+    "sip_uri": {
+      "type": "string"
+    },
+    "transport": {
+      "type": "string",
+      "enum": [
+        "udp",
+        "tcp",
+        "tls"
+      ]
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "auth_mode": {
+      "type": "string",
+      "enum": [
+        "ip_allowlist",
+        "sip_credentials",
+        "ip_allowlist_and_credentials"
+      ]
+    },
+    "username": {
+      "type": "string"
+    },
+    "allowed_sip_ips": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "verification_status": {
+      "type": "string",
+      "description": "not_tested | verified. Any config update resets to not_tested."
+    },
+    "last_test_result": {
+      "type": "object"
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "password_set": {
+      "type": "boolean"
+    },
+    "customer_label": {
+      "type": "string",
+      "const": "Phone server"
+    },
+    "internal_mapping": {
+      "type": "object",
+      "description": "Customer-term to provider-term mapping: inbound = DIDWW voice-in trunk SIP configuration; outbound = DIDWW voice-out trunk allowed_sip_ips."
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "phone_server_id",
+    "organization_id",
+    "name",
+    "status",
+    "server_address",
+    "sip_uri",
+    "transport",
+    "port",
+    "auth_mode",
+    "username",
+    "allowed_sip_ips",
+    "verification_status",
+    "last_test_result",
+    "metadata",
+    "password_set",
+    "customer_label",
+    "internal_mapping",
+    "created_at",
+    "updated_at"
+  ]
+}

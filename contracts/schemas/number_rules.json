@@ -1,0 +1,175 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "number_rules.json",
+  "title": "Number rules resource (as-built)",
+  "description": "When no explicit route exists, a derived default is returned with status 'derived_default' and empty id. latest_route_change and docs_note are only present on stored routes.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Empty string for derived defaults."
+    },
+    "number_route_id": {
+      "type": "string"
+    },
+    "phone_number_id": {
+      "type": "string"
+    },
+    "organization_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "description": "active | superseded | derived_default."
+    },
+    "customer_concept": {
+      "type": "string",
+      "const": "Number rules"
+    },
+    "incoming": {
+      "type": "object",
+      "properties": {
+        "when_called": {
+          "type": "string",
+          "enum": [
+            "answer_with_openphonex_agent",
+            "send_live_audio_to_my_app",
+            "send_to_my_phone_server",
+            "forward_to_phone_number",
+            "disabled"
+          ]
+        },
+        "agent_id": {
+          "type": "string"
+        },
+        "agent_endpoint_id": {
+          "type": "string"
+        },
+        "phone_server_id": {
+          "type": "string"
+        },
+        "server_address": {
+          "type": "string"
+        },
+        "sip_uri": {
+          "type": "string"
+        },
+        "phone_number": {
+          "type": "string"
+        },
+        "fallback": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "when_called"
+      ]
+    },
+    "outgoing": {
+      "type": "object",
+      "properties": {
+        "can_be_used_as_caller_id": {
+          "type": "boolean"
+        },
+        "allowed_agents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowed_countries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_concurrent_calls": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "can_be_used_as_caller_id",
+        "allowed_agents",
+        "allowed_countries",
+        "max_concurrent_calls"
+      ]
+    },
+    "recording": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "consent_state": {
+          "type": "string"
+        },
+        "retention_days": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "enabled",
+        "consent_state",
+        "retention_days"
+      ]
+    },
+    "route_mode": {
+      "type": "string",
+      "enum": [
+        "openphonex_agent",
+        "external_audio_agent",
+        "customer_sip_server",
+        "pstn_forward",
+        "disabled"
+      ]
+    },
+    "fallback": {
+      "type": "object"
+    },
+    "internal_route": {
+      "type": "object"
+    },
+    "latest_route_change": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "docs_note": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "number_route_id",
+    "phone_number_id",
+    "organization_id",
+    "project_id",
+    "status",
+    "customer_concept",
+    "incoming",
+    "outgoing",
+    "recording",
+    "route_mode",
+    "internal_route",
+    "created_at",
+    "updated_at"
+  ]
+}

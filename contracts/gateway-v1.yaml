@@ -1,0 +1,1218 @@
+# SPDX-License-Identifier: Apache-2.0
+# OpenPhonex Gateway API v1 contract
+#
+# The public contract between a self-hosted gateway and the OpenPhonex
+# control plane. Operations are marked `x-status: stable` (the frozen v1
+# surface, a backwards-compatibility guarantee) or `x-status: proposed`
+# (additive, not yet implemented). Request/response bodies for stable
+# operations are published as JSON Schemas in contracts/schemas/*.json.
+openapi: 3.1.0
+info:
+  title: OpenPhonex Gateway API
+  version: 1.0.0
+  summary: Contract between external/self-hosted gateways and the OpenPhonex control plane.
+  description: |
+    ## Scope
+
+    This contract covers the surface a self-hosted gateway uses to talk to the
+    OpenPhonex Cloud control plane:
+
+    * gateway-deployment registration and health reporting,
+    * worker-job enqueue,
+    * trial-call inbound routing,
+    * phone-server CRUD and Number Rules objects,
+    * the audio contract (`pcm_s16le_8000_mono`),
+    * call artifact import (multipart upload).
+
+    ## Authentication
+
+    Every authenticated route uses a bearer token presented as
+    `Authorization: Bearer <token>`. Principals carry a scope list; a scope
+    check passes when the principal holds `*`, the exact scope, or the
+    `<namespace>:*` wildcard.
+
+    The self-hosted stack uses TWO credentials, both sent as
+    `Authorization: Bearer`:
+
+    * a scoped **per-gateway token** (`tgw_...`, `OPENPHONEX_GATEWAY_API_TOKEN`)
+      for gateway-deployment operations — health/lifecycle reporting,
+      realtime-config reads, and artifact upload (see the token endpoints); and
+    * an **organization-scoped worker token** (`OPENPHONEX_WORKER_API_TOKEN`)
+      for inbound call routing and MCP tool invocation.
+
+    Protect the worker token: it carries organization-wide authority (see
+    SECURITY.md). Rotate either token via the token endpoints on compromise.
+
+    ## Audio contract
+
+    The media-plane audio protocol is **`pcm_s16le_8000_mono`**: 16-bit signed
+    little-endian PCM frames, 8000 Hz sample rate, single channel. Gateway
+    media workers MUST produce and consume this format; there is no negotiation
+    mechanism.
+  x-sections:
+    as_built: Documents current behavior exactly; conformance-tested.
+    proposed: Additive design proposals; not implemented.
+
+servers:
+  - url: https://api.openphonex.com
+    description: OpenPhonex Cloud control plane.
+  - url: http://127.0.0.1:8765
+    description: Local development server.
+
+tags:
+  - name: as-built
+    description: >-
+      AS-BUILT surface. Every operation tagged as-built is implemented
+      exactly as described and is covered by the contract conformance tests.
+  - name: proposed-additive
+    description: >-
+      PROPOSED-ADDITIVE surface. NOT IMPLEMENTED. Additive changes for the
+      gateway contract (per-gateway tokens, narrowed scopes, ETag Number-Rules
+      sync, multipart artifact upload, routing_mode, SIP trunk descriptor).
+
+security:
+  - orgApiKey: []
+
+paths:
+  # =========================================================================
+  # AS-BUILT
+  # =========================================================================
+  /v1/gateway-deployments:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: createGatewayDeployment
+      summary: Register a gateway deployment
+      description: |
+        Auth today: org API key with scope `gateways:write`; payload `organization_id` must
+        match the caller's organization (operators exempt). Applies suspension and risk
+        checks; hosted modes also check the `hosted_gateway` scope of suspensions and the
+        per-organization active hosted-deployment cap (the `hosted_gateway_deployments`
+        risk-controls velocity cap; plan default when unset). gateway deployments
+        carry no fee, so creation never charges the wallet (the legacy `charge_wallet`
+        flag was removed with the component price book). A provider account is
+        auto-attached. Self-hosted
+        deployments start as `awaiting_connection` with docker-compose instructions;
+        hosted ones as `active` with a generated `public_url`.
+      x-required-scopes: ["gateways:write"]
+      x-json-schema:
+        request: contracts/schemas/gateway_deployment_create_request.json
+        response: contracts/schemas/gateway_deployment.json
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayDeploymentCreateRequest"
+      responses:
+        "201":
+          description: Gateway deployment created (fully enriched resource, including pricing).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayDeployment"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      tags: [as-built]
+      x-status: stable
+      operationId: listGatewayDeployments
+      summary: List gateway deployments for an organization
+      description: |
+        Scope `gateways:read`. `organization_id` query parameter is checked against the
+        principal. NOTE (as-built): list rows are enriched with `gateway_health` but do
+        NOT include the `pricing` object that single-resource GET adds.
+      x-required-scopes: ["gateways:read"]
+      parameters:
+        - $ref: "#/components/parameters/organizationId"
+        - $ref: "#/components/parameters/projectId"
+      responses:
+        "200":
+          description: Array of gateway deployments.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GatewayDeployment"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/gateway-deployments/{gateway_id}:
+    get:
+      tags: [as-built]
+      x-status: stable
+      operationId: getGatewayDeployment
+      summary: Get one gateway deployment
+      description: |
+        Scope `gateways:read`; response organization must match the principal
+        (`send_scoped_json`). Adds `provider_account`, `deployment_model` and a
+        `pricing` estimate to the row.
+      x-required-scopes: ["gateways:read"]
+      parameters:
+        - $ref: "#/components/parameters/gatewayId"
+      responses:
+        "200":
+          description: Gateway deployment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayDeployment"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/gateway-deployments/{gateway_id}/health-report:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: postGatewayHealthReport
+      summary: Post a gateway health report (self-hosted doctor)
+      description: |
+        Auth today: org API key with scope `gateways:write` (same scope
+        as registration - there is no narrower reporting scope yet; see proposed
+        `gateways:report`). The report is stored verbatim as `last_health_status`; the
+        server derives `status` / `next_step` from named checks (api_health,
+        media_health, voice_gateway_health, realtime_worker_health,
+        storage) and writes an audit event `gateway.health_reported`. Returns the full
+        updated deployment resource.
+      x-required-scopes: ["gateways:write"]
+      x-json-schema:
+        request: contracts/schemas/gateway_health_report_request.json
+        response: contracts/schemas/gateway_deployment.json
+      parameters:
+        - $ref: "#/components/parameters/gatewayId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayHealthReportRequest"
+      responses:
+        "200":
+          description: Updated gateway deployment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayDeployment"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/gateway-deployments/{gateway_id}/call-lifecycle-events:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: postGatewayCallLifecycleEvent
+      summary: Record authoritative SIP/room lifecycle for one call
+      description: |
+        A gateway token may report only for its own deployment and organization.
+        Event ids are idempotent. SIP/room timestamps, rather than worker-declared
+        duration or artifact metadata, drive terminal call state and voice billing.
+        `sip.failed` releases the reservation; `sip.ended` and
+        `session.reconciled` settle from the stored call-event timeline.
+      x-required-scopes: ["gateways:report"]
+      x-json-schema:
+        request: contracts/schemas/gateway_call_lifecycle_event_request.json
+        response: contracts/schemas/gateway_call_lifecycle_event_response.json
+      parameters:
+        - $ref: "#/components/parameters/gatewayId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayCallLifecycleEventRequest"
+      responses:
+        "201":
+          description: Lifecycle event recorded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayCallLifecycleEventResponse"
+        "200":
+          description: Idempotent replay of an already-recorded event.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayCallLifecycleEventResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/worker-jobs:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: enqueueWorkerJob
+      summary: Enqueue a worker job
+      description: |
+
+        **Operator-tier caveat (honest as-built statement).** The required scope today
+        is `worker_jobs:write`, which is the same scope used by the internal worker
+        fleet for `claim`, `complete`, `fail`, `retry`, `execute` and worker
+        heartbeats. It is effectively an infrastructure-tier credential:
+
+        * `kind` is a free-form string; there is NO kind allowlist.
+        * `POST /v1/worker-jobs/claim` with the same scope and NO `organization_id`
+          claims the oldest queued job of ANY organization
+          (`require_organization_access` skips the check when organization_id is
+          empty; `claim_worker_job`).
+        * `GET /v1/worker-heartbeats` under `worker_jobs:read` is not org-scoped.
+
+        Handing `worker_jobs:write` to a customer-hosted gateway therefore over-grants
+        cross-tenant queue access. That is why the proposed section defines a
+        kind-allowlisted, org-pinned `worker_jobs:enqueue` scope. Until then, external
+        gateways should not be issued `worker_jobs:write` keys in production.
+      x-required-scopes: ["worker_jobs:write"]
+      x-json-schema:
+        request: contracts/schemas/worker_job_create_request.json
+        response: contracts/schemas/worker_job.json
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerJobCreateRequest"
+      responses:
+        "201":
+          description: Queued worker job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerJob"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/trial-calls/route:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: routeTrialInboundCall
+      summary: Route an inbound trial call by PIN
+      description: |
+        Scope `trial_calls:write`. Looks up the newest trial call whose
+        `pin` matches and whose status is ready/ringing/media_started, then completes it
+        via `_complete_trial_inbound_call` (): creates an inbound
+        call_session, emits `trial.pin_matched`, and either simulates media
+        (`media_started`, demo artifacts) or - with `live_media=true` - enqueues a
+        `call.inbound_bridge` worker job gated by the live-call env gate
+        (`OPENPHONEX_LIVE_CALLS_ENABLED` + `OPENPHONEX_VOICE_LIVE_ENABLED`, plus
+        `REALTIME_LIVE_ENABLED` for the realtime pipeline). Returns the trial-call
+        resource with `call_id`/`call` attached and status `succeeded`.
+      x-required-scopes: ["trial_calls:write"]
+      x-json-schema:
+        request: contracts/schemas/trial_call_route_request.json
+        response: contracts/schemas/trial_call.json
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TrialCallRouteRequest"
+      responses:
+        "200":
+          description: Trial call after routing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrialCall"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/phone-servers:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: createPhoneServer
+      summary: Create a phone server (customer SIP destination)
+      description: |
+        Scope `numbers:write`. Customer concept "Phone server" maps internally to
+        DIDWW voice-in trunk SIP destination / voice-out trunk allowed_sip_ips.
+        Raw SIP passwords are never persisted - only a `password_reference` pointer.
+      x-required-scopes: ["numbers:write"]
+      x-json-schema:
+        request: contracts/schemas/phone_server_create_request.json
+        response: contracts/schemas/phone_server.json
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PhoneServerCreateRequest"
+      responses:
+        "201":
+          description: Phone server created (verification_status not_tested).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PhoneServer"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      tags: [as-built]
+      x-status: stable
+      operationId: listPhoneServers
+      summary: List phone servers
+      description: |
+        Scope `numbers:read`. With `project_id`, also returns org-wide servers whose
+        project_id is NULL.
+      x-required-scopes: ["numbers:read"]
+      parameters:
+        - $ref: "#/components/parameters/organizationId"
+        - $ref: "#/components/parameters/projectId"
+      responses:
+        "200":
+          description: Array of phone servers.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PhoneServer"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/phone-servers/{phone_server_id}:
+    get:
+      tags: [as-built]
+      x-status: stable
+      operationId: getPhoneServer
+      summary: Get one phone server
+      description: "Scope `numbers:read`."
+      x-required-scopes: ["numbers:read"]
+      parameters:
+        - $ref: "#/components/parameters/phoneServerId"
+      responses:
+        "200":
+          description: Phone server.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PhoneServer"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      tags: [as-built]
+      x-status: stable
+      operationId: updatePhoneServer
+      summary: Update a phone server
+      description: |
+        Scope `numbers:write`. Any update resets `verification_status` to `not_tested`
+        (the server must be re-tested before number rules may route to it).
+      x-required-scopes: ["numbers:write"]
+      x-json-schema:
+        request: contracts/schemas/phone_server_update_request.json
+        response: contracts/schemas/phone_server.json
+      parameters:
+        - $ref: "#/components/parameters/phoneServerId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PhoneServerUpdateRequest"
+      responses:
+        "200":
+          description: Updated phone server.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PhoneServer"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/phone-servers/{phone_server_id}/test:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: testPhoneServer
+      summary: Verify a phone server (dry-run)
+      description: |
+        Scope `numbers:write`. AS-BUILT: this is a dry-run verification -
+        `network_call_performed` is always false; it checks presence of
+        server_address/sip_uri, marks the server `active`/`verified`, and records the
+        result. A live SIP OPTIONS probe is explicitly deferred behind operator
+        approval. Returns the updated phone-server resource.
+      x-required-scopes: ["numbers:write"]
+      parameters:
+        - $ref: "#/components/parameters/phoneServerId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note:
+                  type: string
+      responses:
+        "200":
+          description: Verified phone server.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PhoneServer"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/numbers/{number_id}/number-rules:
+    get:
+      tags: [as-built]
+      x-status: stable
+      operationId: getNumberRules
+      summary: Get Number Rules for a number
+      description: |
+        Scope `numbers:read`. Alias path (same handler): `/v1/phone-numbers/{number_id}/number-rules`.
+        Returns the newest active number_routes row, or a derived default
+        (status `derived_default`) when none exists.
+      x-required-scopes: ["numbers:read"]
+      x-json-schema:
+        response: contracts/schemas/number_rules.json
+      parameters:
+        - $ref: "#/components/parameters/numberId"
+      responses:
+        "200":
+          description: Number rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NumberRules"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      tags: [as-built]
+      x-status: stable
+      operationId: updateNumberRules
+      summary: Update Number Rules for a number
+      description: |
+        Scope `numbers:write`. Alias path: `/v1/phone-numbers/{number_id}/number-rules`.
+        Sections merge over current rules; the previous route row is superseded and a
+        route_changes audit row is written. `send_to_my_phone_server` requires a
+        verified phone server in the same workspace.
+      x-required-scopes: ["numbers:write"]
+      x-json-schema:
+        request: contracts/schemas/number_rules_update_request.json
+        response: contracts/schemas/number_rules.json
+      parameters:
+        - $ref: "#/components/parameters/numberId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NumberRulesUpdateRequest"
+      responses:
+        "200":
+          description: Updated number rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NumberRules"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/call-artifact-imports:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: importCallArtifacts
+      summary: Import call artifacts from a local path (SAME-HOST-ONLY, deprecated for external gateways)
+      description: |
+        Scope `recordings:write`.
+
+        **SAME-HOST-ONLY / DEPRECATED-FOR-EXTERNAL-GATEWAYS.** `source_path` is
+        resolved on the API server's own filesystem. This works for the co-located
+        worker (`call.artifact_import` jobs) and local demos, but an external gateway
+        on another machine cannot deliver artifacts through it. External gateways
+        should NOT build on this endpoint; the replacement is the proposed multipart
+        upload endpoint (`POST /v1/calls/{call_id}/artifacts`, x-status: proposed).
+
+        Behavior: imports one or many artifact sets (wav/mp3/... + transcript.json +
+        latency.json + waveform.json), stores objects under `imports/{call_id}/...`,
+        creates/updates call_sessions, call_recordings, call_artifacts and call_turns,
+        and is idempotent per content-hash `provider_call_id`.
+      x-required-scopes: ["recordings:write"]
+      x-json-schema:
+        request: contracts/schemas/call_artifact_import_request.json
+        response: contracts/schemas/call_artifact_import_result.json
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallArtifactImportRequest"
+      responses:
+        "201":
+          description: Import result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallArtifactImportResult"
+        default:
+          $ref: "#/components/responses/Error"
+
+  # =========================================================================
+  # AS-BUILT: per-gateway tokens, rotation, Number-Rules ETag
+  # sync, and multipart artifact upload. (The proposed-additive SIP trunk
+  # descriptor schema remains proposed; see components/schemas below.)
+  # =========================================================================
+  /v1/gateway-deployments/{gateway_id}/tokens:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: issueGatewayToken
+      summary: "AS-BUILT: issue a per-gateway token at registration"
+      description: |
+        Issues a machine credential bound to one gateway deployment,
+        replacing the practice of copying an org API key onto the gateway host.
+        Token principal properties: pinned `organization_id` and `gateway_id`; scopes
+        restricted to the proposed gateway scope set (`gateways:report`,
+        `worker_jobs:enqueue`, `artifacts:upload`, `number-rules:read`); secret shown
+        once at issuance. Issuance itself requires an org key with `gateways:write`
+        (or an operator). Expected to be called once by the dashboard/CLI during
+        registration and stored on the gateway as `OPENPHONEX_GATEWAY_API_TOKEN`
+        (the env var already referenced by the self-hosted install plan).
+      x-required-scopes: ["gateways:write"]
+      parameters:
+        - $ref: "#/components/parameters/gatewayId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scopes:
+                  type: array
+                  description: Subset of the proposed gateway scope set; defaults to all four.
+                  items:
+                    type: string
+                    enum: ["gateways:report", "worker_jobs:enqueue", "artifacts:upload", "number-rules:read"]
+                expires_in_days:
+                  type: integer
+                  minimum: 1
+      responses:
+        "201":
+          description: Token issued (secret returned once).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProposedGatewayToken"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/gateway-deployments/{gateway_id}/tokens/rotate:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: rotateGatewayToken
+      summary: "AS-BUILT: rotate the per-gateway token"
+      description: |
+        Issues a replacement token and starts a grace window
+        (default 24h) during which both old and new tokens verify, so a fleet can
+        roll without downtime. Callable by the current gateway token itself
+        (self-rotation) or an org key with `gateways:write`. Old token is revoked at
+        the end of the grace window and the rotation is audit-logged.
+      x-required-scopes: ["gateways:write OR current gateway token"]
+      parameters:
+        - $ref: "#/components/parameters/gatewayId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                grace_seconds:
+                  type: integer
+                  minimum: 0
+                  default: 86400
+      responses:
+        "201":
+          description: New token issued; previous token enters grace window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProposedGatewayToken"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/gateway-deployments/{gateway_id}/number-rules:
+    get:
+      tags: [as-built]
+      x-status: stable
+      operationId: syncGatewayNumberRules
+      summary: "AS-BUILT: ETag-cached Number-Rules sync for a gateway"
+      description: |
+        Returns the active Number Rules for every number currently
+        routed through this gateway's organization, as one document with a strong
+        `ETag` (hash of the newest route_changes id set). Gateways poll with
+        `If-None-Match`; an unchanged rule set answers `304 Not Modified` with no
+        body, making frequent polling cheap. Requires the proposed
+        `number-rules:read` scope (gateway token) - today a gateway would need the
+        much broader `numbers:read`.
+      x-required-scopes: ["number-rules:read"]
+      parameters:
+        - $ref: "#/components/parameters/gatewayId"
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Full rules document (ETag header set).
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Strong validator over the rule set.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  gateway_id:
+                    type: string
+                  generated_at:
+                    type: string
+                  number_rules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NumberRules"
+                required: [gateway_id, generated_at, number_rules]
+        "304":
+          description: Not modified; caller's cached copy is current.
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/calls/{call_id}/artifacts:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: uploadCallArtifact
+      summary: "AS-BUILT: multipart artifact upload (replaces same-host source_path imports for external gateways)"
+      description: |
+        Streams call artifacts (recordings, transcript.json,
+        latency.json, waveform.json) from an external gateway over HTTPS instead of
+        requiring a shared filesystem. multipart/form-data with one `file` part per
+        artifact plus a `metadata` JSON part (kind, label, relative_path,
+        sha256). Server stores parts under `imports/{call_id}/...` and reuses the
+        as-built import pipeline (recording selection, waveform, transcript turns).
+        Audio parts MUST be `pcm_s16le_8000_mono` WAV unless the metadata declares a
+        codec explicitly. Idempotency: per-part sha256; a re-uploaded identical part
+        is acknowledged without duplication. Requires the proposed `artifacts:upload`
+        scope pinned to the gateway's organization.
+      x-required-scopes: ["artifacts:upload"]
+      parameters:
+        - name: call_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                metadata:
+                  type: string
+                  description: JSON string; per-file entries keyed by part name.
+                file:
+                  type: string
+                  format: binary
+              required: [file]
+      responses:
+        "201":
+          description: Artifacts stored and attached to the call.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallArtifactImportResult"
+        default:
+          $ref: "#/components/responses/Error"
+
+components:
+  securitySchemes:
+    orgApiKey:
+      type: http
+      scheme: bearer
+      description: |
+        AS-BUILT: organization API key (`tapi_...`) or dashboard session token as
+        `Authorization: Bearer <token>`. Scope semantics: `*`, exact
+        match, or `<namespace>:*`.
+
+        PROPOSED (x-status: proposed, NOT IMPLEMENTED): per-gateway tokens issued at
+        registration with the narrowed scope set below.
+      x-as-built-scopes-used-by-gateways:
+        - "gateways:read"
+        - "gateways:write"
+        - "worker_jobs:write (operator-tier today; see POST /v1/worker-jobs caveat)"
+        - "trial_calls:write"
+        - "numbers:read"
+        - "numbers:write"
+        - "recordings:write"
+      x-proposed-scopes:
+        gateways:report: >-
+          PROPOSED. Post health reports for the token's own gateway only. Strictly
+          narrower than gateways:write (cannot register/modify deployments).
+        worker_jobs:enqueue: >-
+          PROPOSED. Enqueue-only, org-pinned, KIND-ALLOWLISTED worker-job scope.
+          Default allowlist for gateways: call.artifact_import, call.inbound_route,
+          gateway.health_probe. No claim/complete/fail/retry rights, unlike today's
+          worker_jobs:write.
+        artifacts:upload: >-
+          PROPOSED. Upload artifacts to calls in the token's organization via the
+          multipart endpoint. No read access to other recordings.
+        number-rules:read: >-
+          PROPOSED. Read-only Number Rules sync (ETag endpoint) without the broader
+          numbers:read surface.
+
+  parameters:
+    organizationId:
+      name: organization_id
+      in: query
+      required: true
+      description: Checked against the principal's organization (operators exempt).
+      schema:
+        type: string
+    projectId:
+      name: project_id
+      in: query
+      required: false
+      schema:
+        type: string
+    gatewayId:
+      name: gateway_id
+      in: path
+      required: true
+      schema:
+        type: string
+    phoneServerId:
+      name: phone_server_id
+      in: path
+      required: true
+      schema:
+        type: string
+    numberId:
+      name: number_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    Error:
+      description: |
+        Error envelope. `error` is the Python
+        exception class name (e.g. UnauthorizedError=401, ForbiddenError=403,
+        BadRequestError=400, PayloadTooLargeError=413, KeyError/ValueError=500 today).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    # ---- as-built schemas; canonical JSON Schema files live in contracts/schemas/ ----
+    Error:
+      type: object
+      x-json-schema-file: error.json
+      properties:
+        error: {type: string}
+        message: {type: string}
+      required: [error, message]
+
+    GatewayDeploymentCreateRequest:
+      type: object
+      x-json-schema-file: gateway_deployment_create_request.json
+      description: See contracts/schemas/gateway_deployment_create_request.json (canonical).
+      properties:
+        organization_id: {type: string}
+        project_id: {type: string}
+        deployment_model_id:
+          type: string
+          enum: [fully_managed_cloud, managed_numbers_self_hosted_gateway]
+        mode:
+          type: string
+          enum: [self_hosted, cloud_hosted]
+        plan_id: {type: string}
+        carrier_account_id: {type: string}
+        provider: {type: string}
+        provider_account_id: {type: string}
+        region: {type: string}
+        status: {type: string}
+        public_url: {type: string}
+        local_status_url: {type: string}
+        gateway_version: {type: string}
+      required: [organization_id, project_id]
+
+    GatewayDeployment:
+      type: object
+      x-json-schema-file: gateway_deployment.json
+      description: See contracts/schemas/gateway_deployment.json (canonical, conformance-tested).
+      properties:
+        id: {type: string}
+        organization_id: {type: string}
+        project_id: {type: string}
+        carrier_account_id: {type: string}
+        provider_account_id: {type: string}
+        mode: {type: string}
+        plan_id: {type: string}
+        status: {type: string}
+        region: {type: string}
+        public_url: {type: string}
+        local_status_url: {type: string}
+        monthly_base_minor: {type: integer}
+        gateway_per_1000_minutes_minor: {type: integer}
+        included_concurrent_calls: {type: integer}
+        extra_concurrent_call_minor: {type: integer}
+        instructions: {type: object}
+        gateway_version: {type: string}
+        last_health_status: {type: object}
+        last_health_at: {type: [string, "null"]}
+        last_test_result: {type: object}
+        gateway_health: {type: object}
+        health: {type: object}
+        provider_account: {type: object}
+        deployment_model: {type: object}
+        pricing:
+          type: object
+          description: Present on single-resource GET/POST only, not on list.
+        created_at: {type: string}
+        updated_at: {type: string}
+        routing_mode:
+          type: string
+          enum: [direct_trunk, cloud_bridged]
+          description: >-
+            PROPOSED FIELD (x-status: proposed, NOT IMPLEMENTED). direct_trunk: the
+            provider trunk points straight at the customer gateway (today's implicit
+            behavior for self-hosted gateways). cloud_bridged: media hairpins through
+            an OpenPhonex cloud bridge - DEFERRED, documented for completeness only.
+          x-status: proposed
+      required:
+        - id
+        - organization_id
+        - project_id
+        - mode
+        - plan_id
+        - status
+
+    GatewayHealthReportRequest:
+      type: object
+      x-json-schema-file: gateway_health_report_request.json
+      description: See contracts/schemas/gateway_health_report_request.json (canonical).
+      properties:
+        checks: {}
+        api_health: {type: object}
+        media_health: {type: object}
+        voice_gateway_health: {type: object}
+        realtime_worker_health: {type: object}
+        storage: {type: object}
+        last_test_result: {type: object}
+        version: {type: string}
+        gateway_version: {type: string}
+        public_url: {type: string}
+        local_status_url: {type: string}
+        reported_at: {type: string}
+
+    GatewayCallLifecycleEventRequest:
+      type: object
+      x-json-schema-file: gateway_call_lifecycle_event_request.json
+      properties:
+        event_id: {type: string}
+        call_id: {type: string}
+        event_type:
+          type: string
+          enum: [sip.answered, room.media_started, room.media_heartbeat, room.ended, sip.ended, sip.failed, session.reconciled]
+        source_component:
+          type: string
+          enum: [livekit_sip, livekit_room, livekit_reconciler]
+        observed_at: {type: string}
+        details: {type: object}
+      required: [event_id, call_id, event_type, source_component]
+
+    GatewayCallLifecycleEventResponse:
+      type: object
+      x-json-schema-file: gateway_call_lifecycle_event_response.json
+      properties:
+        organization_id: {type: string}
+        duplicate: {type: boolean}
+        canonical_type:
+          type: string
+          enum: [call.answered, media.started, media.heartbeat, media.ended, call.ended, call.failed]
+        event: {type: object}
+        call: {type: object}
+        billing: {type: [object, "null"]}
+      required: [organization_id, duplicate, canonical_type, event, call, billing]
+
+    WorkerJobCreateRequest:
+      type: object
+      x-json-schema-file: worker_job_create_request.json
+      properties:
+        kind: {type: string}
+        payload: {type: object}
+        organization_id: {type: [string, "null"]}
+      required: [kind]
+
+    WorkerJob:
+      type: object
+      x-json-schema-file: worker_job.json
+      description: See contracts/schemas/worker_job.json (canonical, conformance-tested).
+      properties:
+        id: {type: string}
+        organization_id: {type: [string, "null"]}
+        kind: {type: string}
+        status:
+          type: string
+          description: "Written values: queued, running, succeeded, failed, blocked, dead."
+        payload: {type: object}
+        result: {type: object}
+        attempts: {type: integer}
+        last_error: {type: string}
+        run_after: {type: string}
+        locked_by: {type: string}
+        locked_at: {type: [string, "null"]}
+        completed_at: {type: [string, "null"]}
+        created_at: {type: string}
+        updated_at: {type: string}
+      required: [id, kind, status, payload, result, attempts, run_after]
+
+    TrialCallRouteRequest:
+      type: object
+      x-json-schema-file: trial_call_route_request.json
+      properties:
+        pin: {type: string}
+        from_phone_number: {type: string}
+        provider: {type: string}
+        provider_call_id: {type: string}
+        country: {type: string}
+        live_media: {type: boolean}
+        media_pipeline:
+          type: string
+          enum: [legacy, realtime]
+      required: [pin]
+
+    TrialCall:
+      type: object
+      x-json-schema-file: trial_call.json
+      description: See contracts/schemas/trial_call.json (canonical, conformance-tested).
+      properties:
+        id: {type: string}
+        organization_id: {type: string}
+        project_id: {type: string}
+        agent_id: {type: [string, "null"]}
+        agent_endpoint_id: {type: string}
+        demo_phone_number: {type: string}
+        trial_phone_number: {type: string}
+        demo_number: {type: string}
+        pin: {type: string}
+        status: {type: string}
+        max_free_seconds: {type: integer}
+        expires_at: {type: string}
+        call_id: {type: [string, "null"]}
+        result: {type: object}
+        instructions: {type: object}
+        call: {type: object}
+        created_at: {type: string}
+        updated_at: {type: string}
+      required: [id, organization_id, project_id, agent_endpoint_id, pin, status]
+
+    PhoneServerCreateRequest:
+      type: object
+      x-json-schema-file: phone_server_create_request.json
+      properties:
+        organization_id: {type: string}
+        project_id: {type: [string, "null"]}
+        name: {type: string}
+        server_address: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        transport: {type: string, enum: [udp, tcp, tls]}
+        auth_mode: {type: string, enum: [ip_allowlist, sip_credentials, ip_allowlist_and_credentials]}
+        username: {type: string}
+        password: {type: string}
+        password_reference: {type: string}
+        allowed_sip_ips:
+          type: array
+          items: {type: string}
+        sip_uri: {type: string}
+        metadata: {type: object}
+      required: [organization_id, server_address]
+
+    PhoneServerUpdateRequest:
+      type: object
+      x-json-schema-file: phone_server_update_request.json
+      description: All optional; any update resets verification_status to not_tested.
+
+    PhoneServer:
+      type: object
+      x-json-schema-file: phone_server.json
+      description: See contracts/schemas/phone_server.json (canonical, conformance-tested).
+      properties:
+        id: {type: string}
+        phone_server_id: {type: string}
+        organization_id: {type: string}
+        project_id: {type: [string, "null"]}
+        name: {type: string}
+        status: {type: string}
+        server_address: {type: string}
+        sip_uri: {type: string}
+        transport: {type: string, enum: [udp, tcp, tls]}
+        port: {type: integer}
+        auth_mode: {type: string}
+        username: {type: string}
+        allowed_sip_ips:
+          type: array
+          items: {type: string}
+        verification_status: {type: string}
+        last_test_result: {type: object}
+        metadata: {type: object}
+        password_set: {type: boolean}
+        customer_label: {type: string}
+        internal_mapping: {type: object}
+        created_at: {type: string}
+        updated_at: {type: string}
+      required: [id, organization_id, name, status, server_address, verification_status]
+
+    NumberRules:
+      type: object
+      x-json-schema-file: number_rules.json
+      description: See contracts/schemas/number_rules.json (canonical, conformance-tested).
+      properties:
+        id: {type: string}
+        number_route_id: {type: string}
+        phone_number_id: {type: string}
+        organization_id: {type: string}
+        project_id: {type: string}
+        status: {type: string}
+        customer_concept: {type: string}
+        incoming: {type: object}
+        outgoing: {type: object}
+        recording: {type: object}
+        route_mode:
+          type: string
+          enum: [openphonex_agent, external_audio_agent, customer_sip_server, pstn_forward, disabled]
+        fallback: {type: object}
+        internal_route: {type: object}
+        latest_route_change: {type: [object, "null"]}
+        docs_note: {type: string}
+        created_at: {type: [string, "null"]}
+        updated_at: {type: [string, "null"]}
+      required: [phone_number_id, organization_id, project_id, status, incoming, outgoing, recording, route_mode]
+
+    NumberRulesUpdateRequest:
+      type: object
+      x-json-schema-file: number_rules_update_request.json
+      description: See contracts/schemas/number_rules_update_request.json (canonical).
+
+    CallArtifactImportRequest:
+      type: object
+      x-json-schema-file: call_artifact_import_request.json
+      description: >-
+        SAME-HOST-ONLY; deprecated for external gateways. See
+        contracts/schemas/call_artifact_import_request.json (canonical).
+      properties:
+        source_path:
+          type: string
+          description: Local filesystem path on the API host.
+        mode: {type: string, enum: [auto, folder_per_call, file_per_call]}
+        organization_id: {type: string}
+        project_id: {type: string}
+        call_id: {type: string}
+        provider_call_id: {type: string}
+        label: {type: string}
+      required: [source_path]
+
+    CallArtifactImportResult:
+      type: object
+      x-json-schema-file: call_artifact_import_result.json
+      description: See contracts/schemas/call_artifact_import_result.json (canonical, conformance-tested).
+      properties:
+        source_path: {type: string}
+        mode: {type: string}
+        imported_count: {type: integer}
+        skipped_count: {type: integer}
+        calls:
+          type: array
+          items: {type: object}
+      required: [source_path, mode, imported_count, skipped_count, calls]
+
+    AudioContract:
+      type: object
+      x-status: stable
+      description: |
+        AS-BUILT audio contract: pcm_s16le_8000_mono - 16-bit signed little-endian
+        PCM, 8000 Hz, mono. Sources: media server health `audio_protocol`
+         and FakeProvider trunk codecs. No negotiation exists today.
+      properties:
+        audio_protocol:
+          type: string
+          const: pcm_s16le_8000_mono
+        sample_format: {type: string, const: s16le}
+        sample_rate_hz: {type: integer, const: 8000}
+        channels: {type: integer, const: 1}
+
+    # ---- schemas (ProposedGatewayToken is now AS-BUILT; ProposedSipTrunkDescriptor stays proposed) ----
+    ProposedGatewayToken:
+      type: object
+      x-status: stable
+      description: AS-BUILT. Per-gateway machine credential issued at registration.
+      properties:
+        id: {type: string}
+        gateway_id: {type: string}
+        organization_id: {type: string}
+        token:
+          type: string
+          description: Secret; returned once at issuance/rotation only.
+        scopes:
+          type: array
+          items:
+            type: string
+            enum: ["gateways:report", "worker_jobs:enqueue", "artifacts:upload", "number-rules:read"]
+        kind_allowlist:
+          type: array
+          description: Job kinds this token may enqueue under worker_jobs:enqueue.
+          items: {type: string}
+        expires_at: {type: [string, "null"]}
+        rotated_from: {type: [string, "null"]}
+        created_at: {type: string}
+      required: [id, gateway_id, organization_id, token, scopes]
+
+    ProposedSipTrunkDescriptor:
+      type: object
+      x-status: proposed
+      description: |
+        NOT IMPLEMENTED. Provider-agnostic SIP trunk descriptor for the gateway
+        contract, replacing free-text instructions. Would be attached to gateway
+        deployments (inbound: where the provider sends calls; outbound: what the
+        provider accepts from the gateway) and generated from Phone-server +
+        provider-account data. Secrets stay references, never values - matching the
+        as-built password_reference convention.
+      properties:
+        direction:
+          type: string
+          enum: [inbound, outbound]
+        provider:
+          type: string
+          description: didww today; future adapters allowed.
+        signaling_address: {type: string}
+        port: {type: integer, default: 5060}
+        transport: {type: string, enum: [udp, tcp, tls]}
+        codecs:
+          type: array
+          items: {type: string}
+          default: [pcm_s16le_8000_mono]
+        auth_mode:
+          type: string
+          enum: [ip_allowlist, sip_credentials, ip_allowlist_and_credentials]
+        allowed_sip_ips:
+          type: array
+          items: {type: string}
+        username: {type: string}
+        password_reference:
+          type: string
+          description: Pointer to an external secret; raw credentials never appear.
+        routing_mode:
+          type: string
+          enum: [direct_trunk, cloud_bridged]
+          description: cloud_bridged is DEFERRED; documented for shape only.
+      required: [direction, provider, signaling_address, transport, auth_mode]

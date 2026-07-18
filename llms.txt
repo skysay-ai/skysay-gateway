@@ -1,0 +1,53 @@
+# OpenPhonex Gateway
+
+> OpenPhonex Gateway — the self-hostable LiveKit media plane behind OpenPhonex: livekit-server + livekit-sip + the production media-plane agent + a session reconciler + redis. Call audio (SIP/RTP) stays on the operator's servers; the OpenPhonex control plane (Cloud or self-hosted) resolves per-call config, authorizes tools, and settles billing over a thin HTTPS bearer-token link. Numbers, KYB/compliance, billing, and abuse policy stay in the control plane.
+
+## Repository map
+
+- [Self-host install runbook](INSTALL.md): the linear, step-by-step self-host guide (prerequisites -> configure -> up -> provision -> smoke test -> test call); every env var documented with what/where-to-get-it/example. START HERE to install.
+- [Agent operating instructions](AGENTS.md): how an AI agent should execute the install and work in this repo.
+- [Self-host smoke test](packages/openphonex-gateway/deploy/selfhost-smoketest.sh): PASS/FAIL verification of the running stack (services, agent registration, both control-plane tokens); exit 0 = call-ready.
+- [LiveKit production agent](livekit_agent/): the production media-plane agent (runtime modules byte-identical to what OpenPhonex production runs; minimal pinned Dockerfile); per-call config resolves from the control plane.
+- [Self-host quickstart + deploy files](packages/openphonex-gateway/deploy/SELFHOST.md): runbook, [docker-compose.livekit.yml](packages/openphonex-gateway/deploy/docker-compose.livekit.yml), config templates.
+- [openphonex-gateway package](packages/openphonex-gateway/): shared realtime pipeline / provider library (streaming STT-LLM-TTS primitives, semantic audio policy, call evidence) exercised by the exported tests.
+- [openphonex-common package](packages/openphonex-common/): control-plane-free shared config + runtime helpers.
+- [Gateway↔Cloud contract](contracts/gateway-v1.yaml): OpenAPI v1.0.0, stable.
+- [JSON Schemas](contracts/schemas/): request/response bodies for the stable surface.
+- [README](README.md): overview and quickstart pointers.
+
+## The LiveKit media plane (matches production)
+
+The self-host stack mirrors OpenPhonex production: livekit-server v1.13.3 + livekit-sip v1.7.0 + redis 7.4.5 (all digest-pinned) + the `agents` container running [livekit_agent/agent/production_agent.py](livekit_agent/agent/production_agent.py) (LiveKit Agents 1.6.5) + a session `reconciler`. The agent joins each inbound room unsubscribed and admits NO caller audio until the control plane authorizes the call: `POST /v1/calls/inbound/route` (worker token) resolves the DID to the authoritative agent, then `GET /v1/agents/{agent_id}/realtime-config` (gateway token) returns the validated semantic config (system prompt, first message, language, Deepgram nova-3 STT, Gemini LLM, ElevenLabs TTS + voice, tool allowlist). Tools come from MCP `tools/list` on `POST /mcp`, are exposed to the model ONLY if allowlisted, and every invocation re-crosses the control plane (`tools/call`) with an audit trail. Lifecycle events post to `POST /v1/gateway-deployments/{id}/call-lifecycle-events` and produce the authoritative billing verdict; artifacts upload to `POST /v1/calls/{call_id}/artifacts`. The reconciler closes sessions whose agent died so dangling billed minutes are impossible.
+
+## The contract (gateway ↔ Cloud)
+
+The exact surface is [contracts/gateway-v1.yaml](contracts/gateway-v1.yaml) (v1.0.0 stable) plus [contracts/schemas/](contracts/schemas/). Endpoints the stack uses:
+
+- `POST /v1/calls/inbound/route` — resolve an inbound DID to the authoritative agent (worker token).
+- `GET /v1/agents/{agent_id}/realtime-config` — the validated per-call semantic config (gateway token).
+- `POST /mcp` — MCP `tools/list` / `tools/call` for allowlisted agent tools (worker token).
+- `POST /v1/gateway-deployments/{id}/call-lifecycle-events` — lifecycle + authoritative billing verdict (gateway token).
+- `POST /v1/calls/{id}/artifacts` — upload call artifacts with duration provenance (gateway token).
+- `POST /v1/gateway-deployments/{id}/tokens` / `.../tokens/rotate` — mint / rotate the per-gateway `tgw_` token (shown once).
+- `GET /v1/gateway-deployments/{id}/number-rules` — routing read (also the smoke test's gateway-token probe).
+
+Auth: `Authorization: Bearer` from `OPENPHONEX_GATEWAY_API_TOKEN` (`tgw_...`, narrowly scoped) and `OPENPHONEX_WORKER_API_TOKEN` (organization-scoped; see SECURITY.md). The transport layer requires https (or verified loopback http) and refuses cross-origin redirects.
+
+## Audio contract
+
+`pcm_s16le_8000_mono` — 16-bit little-endian PCM, 8 kHz, mono. No negotiation.
+
+## Safety boundaries
+
+- The agent admits no caller audio before the control plane authorizes the call and its config validates.
+- Tools are model-visible ONLY if allowlisted in realtime-config; every call is auditable at the control plane.
+- Bearer tokens never travel plaintext to non-loopback hosts; cross-origin redirects are refused.
+- The worker token is organization-scoped: protect the host, rotate on suspicion ([SECURITY.md](SECURITY.md)).
+
+## More
+
+- [CONTRIBUTING](CONTRIBUTING.md)
+- [SECURITY](SECURITY.md)
+- [LICENSE](LICENSE)
+- [TRADEMARK](TRADEMARK.md)
+- [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES.md)

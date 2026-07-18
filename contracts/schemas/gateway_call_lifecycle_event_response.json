@@ -1,0 +1,47 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gateway_call_lifecycle_event_response.json",
+  "title": "Gateway call lifecycle ingestion result",
+  "type": "object",
+  "properties": {
+    "organization_id": {
+      "type": "string"
+    },
+    "duplicate": {
+      "type": "boolean"
+    },
+    "canonical_type": {
+      "type": "string",
+      "enum": [
+        "call.answered",
+        "media.started",
+        "media.heartbeat",
+        "media.ended",
+        "call.ended",
+        "call.failed"
+      ]
+    },
+    "event": {
+      "type": "object"
+    },
+    "call": {
+      "type": "object"
+    },
+    "billing": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "organization_id",
+    "duplicate",
+    "canonical_type",
+    "event",
+    "call",
+    "billing"
+  ],
+  "additionalProperties": false
+}

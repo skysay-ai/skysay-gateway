@@ -1,0 +1,159 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Unigox OÜ
+#
+# OpenPhonex Gateway — LiveKit self-host stack. This mirrors the
+# PRODUCTION OpenPhonex voice box: the same agent code, the same pinned
+# component versions (tag AND digest), the same host-networking topology, and
+# the same per-call config resolution through the OpenPhonex control plane
+# (prepare_inbound -> realtime-config; see SELFHOST.md).
+#
+#   services: redis + livekit-server + livekit-sip + agents + reconciler
+#             (+ a one-shot, profile-gated `provision` bootstrap)
+#
+# Quickstart (full runbook: SELFHOST.md; step-by-step: repo-root INSTALL.md):
+#   cp livekit.yaml.example livekit.yaml       # fill in your LiveKit API key pair
+#   cp sip.yaml.example sip.yaml               # the SAME key pair
+#   cp .env.livekit.example .env.livekit       # control-plane + provider creds
+#   mkdir -p sessions call-evidence && sudo chown -R 10001:10001 sessions call-evidence
+#   docker compose -f docker-compose.livekit.yml up -d --build
+#   docker compose -f docker-compose.livekit.yml --profile provision run --rm provision
+#   bash selfhost-smoketest.sh                 # PASS/FAIL verification; PASS = call-ready
+#
+# The agent image builds from the production build context at
+# ../../../livekit_agent (the runtime module subset of the production agent,
+# byte-identical file-for-file — export tests enforce parity — with a minimal
+# public Dockerfile). Override LIVEKIT_AGENT_CONTEXT to point the build at a
+# different context directory if you keep the agent sources elsewhere.
+#
+# NEVER commit the filled-in livekit.yaml / sip.yaml / .env.livekit — the
+# export manifest excludes them and the secret scanner refuses .env files.
+
+name: openphonex-livekit-selfhost
+
+services:
+  redis:
+    # Same pin as the production voice box.
+    image: redis:7.4.5-alpine@sha256:bb186d083732f669da90be8b0f975a37812b15e913465bb14d845db72a4e3e08
+    command: [redis-server, --bind, 127.0.0.1, --port, "6380", --save, "", --appendonly, "no"]
+    network_mode: host
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, redis-cli, -h, 127.0.0.1, -p, "6380", ping]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+
+  livekit:
+    # Same pin as the production voice box (livekit-server v1.13.3).
+    image: livekit/livekit-server:v1.13.3@sha256:483b8b7b5b0654f91f1e8bdc7b46fcd37fd9911612ecf627f97e3185a89825bd
+    command: [--config, /run/sch236/livekit.yaml]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ./livekit.yaml
+        target: /run/sch236/livekit.yaml
+        read_only: true
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  sip:
+    # Same pin as the production voice box (livekit-sip v1.7.0).
+    image: livekit/sip:v1.7.0@sha256:55d0882d4c3549d1c6b975cc1139d75a6d17cd5b4b5f7edbb9e9b4185ec351e7
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ./sip.yaml
+        target: /sip/config.yaml
+        read_only: true
+    depends_on:
+      livekit:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  agents:
+    # The PRODUCTION agent: same code, same Dockerfile, same entrypoint. The
+    # entrypoint sources /run/sch172/carrier.env (your .env.livekit) and drops
+    # privileges to the unprivileged `agent` user before exec.
+    build:
+      context: ${LIVEKIT_AGENT_CONTEXT:-../../../livekit_agent}
+      dockerfile: agent/Dockerfile
+    image: openphonex-livekit-agent:selfhost
+    entrypoint: [/app/carrier-entrypoint.sh]
+    command: [python, /app/production_agent.py, start]
+    user: "0:0"
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      SCH236_SESSION_ROOT: /sessions
+      SCH236_CALL_EVIDENCE_ROOT: /call-evidence
+    volumes:
+      - type: bind
+        source: ./.env.livekit
+        target: /run/sch172/carrier.env
+        read_only: true
+      - type: bind
+        source: ./sessions
+        target: /sessions
+      - type: bind
+        source: ./call-evidence
+        target: /call-evidence
+    depends_on:
+      livekit:
+        condition: service_started
+
+  reconciler:
+    # Orphan/crash reconciliation: closes stale sessions against the control
+    # plane so a killed agent can never leave dangling billed minutes.
+    build:
+      context: ${LIVEKIT_AGENT_CONTEXT:-../../../livekit_agent}
+      dockerfile: agent/Dockerfile
+    image: openphonex-livekit-agent:selfhost
+    entrypoint: [/app/carrier-entrypoint.sh]
+    command: [python, /app/reconcile_sessions.py]
+    user: "0:0"
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      SCH236_SESSION_ROOT: /sessions
+      SCH236_RECONCILE_STALE_SECONDS: "15"
+    volumes:
+      - type: bind
+        source: ./.env.livekit
+        target: /run/sch172/carrier.env
+        read_only: true
+      - type: bind
+        source: ./sessions
+        target: /sessions
+    depends_on:
+      livekit:
+        condition: service_started
+
+  provision:
+    # One-shot LiveKit SIP bootstrap (inbound trunk + dispatch rule for your
+    # DID). Profile-gated: run it once after the stack is up, and again only
+    # when the DID / carrier allowlist changes:
+    #   docker compose -f docker-compose.livekit.yml --profile provision run --rm provision
+    profiles: [provision]
+    build:
+      context: ${LIVEKIT_AGENT_CONTEXT:-../../../livekit_agent}
+      dockerfile: agent/Dockerfile
+    image: openphonex-livekit-agent:selfhost
+    entrypoint: [/app/carrier-entrypoint.sh]
+    command: [python, /app/provision_selfhost.py]
+    user: "0:0"
+    network_mode: host
+    restart: "no"
+    volumes:
+      - type: bind
+        source: ./.env.livekit
+        target: /run/sch172/carrier.env
+        read_only: true
+    depends_on:
+      livekit:
+        condition: service_started
+      sip:
+        condition: service_started

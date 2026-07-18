@@ -1,0 +1,102 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phone_server_create_request.json",
+  "title": "POST /v1/phone-servers request body (as-built)",
+  "description": "organization_id and server_address (aliases: address, host) are required. Raw passwords are never stored: passing 'password' only records a password_reference pointer (external-secret://phone-servers/{id}/sip-password).",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "organization_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "description": "Defaults to 'My phone server'."
+    },
+    "status": {
+      "type": "string",
+      "description": "Defaults to 'unverified'."
+    },
+    "server_address": {
+      "type": "string"
+    },
+    "address": {
+      "type": "string"
+    },
+    "host": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "Defaults to 5060."
+    },
+    "transport": {
+      "type": "string",
+      "enum": [
+        "udp",
+        "tcp",
+        "tls"
+      ],
+      "description": "Defaults to udp."
+    },
+    "auth_mode": {
+      "type": "string",
+      "enum": [
+        "ip_allowlist",
+        "sip_credentials",
+        "ip_allowlist_and_credentials"
+      ],
+      "description": "Defaults to ip_allowlist."
+    },
+    "username": {
+      "type": "string"
+    },
+    "password": {
+      "type": "string",
+      "description": "Not stored; converted to a password_reference."
+    },
+    "password_reference": {
+      "type": "string"
+    },
+    "allowed_sip_ips": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "string",
+          "description": "Comma-separated list."
+        }
+      ],
+      "description": "Alias: allowed_ips."
+    },
+    "sip_uri": {
+      "type": "string",
+      "description": "Defaults to sip:{server_address}:{port}."
+    },
+    "verification_status": {
+      "type": "string",
+      "description": "Defaults to not_tested."
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "organization_id"
+  ]
+}

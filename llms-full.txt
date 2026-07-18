@@ -1,0 +1,353 @@
+# OpenPhonex Gateway
+
+**Self-host the media plane OpenPhonex production runs.** This repository is
+the LiveKit-based voice stack behind [OpenPhonex](https://openphonex.com):
+livekit-server + livekit-sip + the **production media-plane agent** (the
+runtime modules in [`livekit_agent/`](livekit_agent/) are byte-identical to
+what OpenPhonex production runs, enforced by release tests) + a session
+reconciler + redis.
+
+**You self-host the media plane** — call audio (SIP/RTP) terminates on your
+servers, and the voice pipeline (Deepgram STT → Gemini LLM → ElevenLabs TTS)
+runs on your own provider keys.
+**OpenPhonex Cloud stays the control plane** — phone numbers (global carrier
+coverage), end-user KYC/KYB compliance, Number Rules & routing, per-call
+authorization, billing & wallet, and the dashboard · API · MCP.
+The only thing connecting the two is a thin control link: bearer tokens ·
+per-call config · lifecycle/billing events · artifact upload.
+
+```
+      PSTN / your carrier (SIP trunk, your DID)
+                    |
+        UDP 5060 + RTP 10000-10100
+                    v
+  [ livekit-sip v1.7.0 ] --- [ livekit-server v1.13.3 ] --- [ redis 7.4.5 ]
+                    \                 |
+                     \                | (agent dispatch, host-local)
+                      v               v
+                  [ agents: the production LiveKit agent ]
+                  [ reconciler: stale-session cleanup    ]
+                    |
+                    |  HTTPS (bearer tokens; per-call config, tools,
+                    v   lifecycle/billing events, artifact upload)
+          [ OpenPhonex control plane (Cloud or self-hosted) ]
+```
+
+- License: **Apache-2.0** ([`LICENSE`](LICENSE), [`NOTICE`](NOTICE))
+- Brand: [`TRADEMARK.md`](TRADEMARK.md) — the code is open; "OpenPhonex" is not licensed
+- Contract: [`contracts/gateway-v1.yaml`](contracts/gateway-v1.yaml) (v1.0.0, stable)
+- Agent/LLM guide: [`llms.txt`](llms.txt) · agent instructions: [`AGENTS.md`](AGENTS.md)
+
+## Repository map
+
+| Path | What |
+|------|------|
+| [`INSTALL.md`](INSTALL.md) | **Step-by-step self-host install runbook** — written to be executable by a person or an AI agent |
+| [`AGENTS.md`](AGENTS.md) | Operating instructions for AI agents working in this repo |
+| [`livekit_agent/`](livekit_agent/) | **The production LiveKit media-plane agent** — runtime modules byte-identical to what OpenPhonex production runs (enforced by release tests) + a minimal pinned Dockerfile |
+| [`packages/openphonex-gateway/deploy/`](packages/openphonex-gateway/deploy/SELFHOST.md) | The self-host stack: compose file, config templates, `SELFHOST.md` runbook, `selfhost-smoketest.sh` |
+| [`packages/openphonex-gateway/`](packages/openphonex-gateway/) | Shared realtime pipeline / provider library (streaming STT·LLM·TTS primitives, audio policy, call evidence) used by the stack's tests |
+| [`packages/openphonex-common/`](packages/openphonex-common/) | Control-plane-free shared config + runtime helpers |
+| [`contracts/gateway-v1.yaml`](contracts/gateway-v1.yaml) | The exact gateway↔Cloud API surface (stable v1.0.0) |
+| [`contracts/schemas/`](contracts/schemas/) | JSON Schemas for the stable request/response bodies |
+
+## Quickstart (self-host — matches production)
+
+**Follow [`INSTALL.md`](INSTALL.md)** — a linear runbook (prerequisites →
+configure → `docker compose up` → provision → smoke test → test call) with
+every environment variable documented (what it is, where to get it, example).
+The stack ships a self-check:
+
+```bash
+cd packages/openphonex-gateway/deploy
+bash selfhost-smoketest.sh   # PASS/FAIL per check; PASS = call-ready
+```
+
+Pinned components (same tag **and** digest as production — enforced by
+release tests): livekit-server v1.13.3, livekit-sip v1.7.0, redis 7.4.5,
+livekit-agents 1.6.5 (+ Deepgram/Google/ElevenLabs/Silero/turn-detector
+plugins, pip-pinned in
+[`livekit_agent/agent/requirements.txt`](livekit_agent/agent/requirements.txt)).
+
+Per-call agent config — system prompt, models, voice, and the tool
+allowlist — resolves live from the control plane
+(`POST /v1/calls/inbound/route` → `GET /v1/agents/{id}/realtime-config`);
+the agent admits **no caller audio** until that authorization completes.
+Background and troubleshooting:
+[`packages/openphonex-gateway/deploy/SELFHOST.md`](packages/openphonex-gateway/deploy/SELFHOST.md).
+
+## Local development
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e packages/openphonex-common -e packages/openphonex-gateway
+
+python -m unittest discover -s tests    # runs without any cloud access
+```
+
+## Safety
+
+The agent is **fail-closed**: it joins each inbound room unsubscribed and
+consumes no caller audio until the control plane resolves the number route and
+returns a validated realtime-config. Tools are exposed to the model only if
+allowlisted there, and every invocation crosses the control plane with an
+audit trail. The control-plane transport requires **https** (or verified
+loopback http) and refuses cross-origin redirects. Audio on the wire is
+`pcm_s16le_8000_mono` (16-bit LE PCM, 8 kHz, mono; no negotiation). See
+[`SECURITY.md`](SECURITY.md) for the token model (gateway `tgw_` token vs the
+organization-scoped worker token).
+
+## More
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- [`SECURITY.md`](SECURITY.md)
+- [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)
+
+
+<!-- ---------------------------------------------------------------- -->
+
+# OpenPhonex Gateway
+
+> OpenPhonex Gateway — the self-hostable LiveKit media plane behind OpenPhonex: livekit-server + livekit-sip + the production media-plane agent + a session reconciler + redis. Call audio (SIP/RTP) stays on the operator's servers; the OpenPhonex control plane (Cloud or self-hosted) resolves per-call config, authorizes tools, and settles billing over a thin HTTPS bearer-token link. Numbers, KYB/compliance, billing, and abuse policy stay in the control plane.
+
+## Repository map
+
+- [Self-host install runbook](INSTALL.md): the linear, step-by-step self-host guide (prerequisites -> configure -> up -> provision -> smoke test -> test call); every env var documented with what/where-to-get-it/example. START HERE to install.
+- [Agent operating instructions](AGENTS.md): how an AI agent should execute the install and work in this repo.
+- [Self-host smoke test](packages/openphonex-gateway/deploy/selfhost-smoketest.sh): PASS/FAIL verification of the running stack (services, agent registration, both control-plane tokens); exit 0 = call-ready.
+- [LiveKit production agent](livekit_agent/): the production media-plane agent (runtime modules byte-identical to what OpenPhonex production runs; minimal pinned Dockerfile); per-call config resolves from the control plane.
+- [Self-host quickstart + deploy files](packages/openphonex-gateway/deploy/SELFHOST.md): runbook, [docker-compose.livekit.yml](packages/openphonex-gateway/deploy/docker-compose.livekit.yml), config templates.
+- [openphonex-gateway package](packages/openphonex-gateway/): shared realtime pipeline / provider library (streaming STT-LLM-TTS primitives, semantic audio policy, call evidence) exercised by the exported tests.
+- [openphonex-common package](packages/openphonex-common/): control-plane-free shared config + runtime helpers.
+- [Gateway↔Cloud contract](contracts/gateway-v1.yaml): OpenAPI v1.0.0, stable.
+- [JSON Schemas](contracts/schemas/): request/response bodies for the stable surface.
+- [README](README.md): overview and quickstart pointers.
+
+## The LiveKit media plane (matches production)
+
+The self-host stack mirrors OpenPhonex production: livekit-server v1.13.3 + livekit-sip v1.7.0 + redis 7.4.5 (all digest-pinned) + the `agents` container running [livekit_agent/agent/production_agent.py](livekit_agent/agent/production_agent.py) (LiveKit Agents 1.6.5) + a session `reconciler`. The agent joins each inbound room unsubscribed and admits NO caller audio until the control plane authorizes the call: `POST /v1/calls/inbound/route` (worker token) resolves the DID to the authoritative agent, then `GET /v1/agents/{agent_id}/realtime-config` (gateway token) returns the validated semantic config (system prompt, first message, language, Deepgram nova-3 STT, Gemini LLM, ElevenLabs TTS + voice, tool allowlist). Tools come from MCP `tools/list` on `POST /mcp`, are exposed to the model ONLY if allowlisted, and every invocation re-crosses the control plane (`tools/call`) with an audit trail. Lifecycle events post to `POST /v1/gateway-deployments/{id}/call-lifecycle-events` and produce the authoritative billing verdict; artifacts upload to `POST /v1/calls/{call_id}/artifacts`. The reconciler closes sessions whose agent died so dangling billed minutes are impossible.
+
+## The contract (gateway ↔ Cloud)
+
+The exact surface is [contracts/gateway-v1.yaml](contracts/gateway-v1.yaml) (v1.0.0 stable) plus [contracts/schemas/](contracts/schemas/). Endpoints the stack uses:
+
+- `POST /v1/calls/inbound/route` — resolve an inbound DID to the authoritative agent (worker token).
+- `GET /v1/agents/{agent_id}/realtime-config` — the validated per-call semantic config (gateway token).
+- `POST /mcp` — MCP `tools/list` / `tools/call` for allowlisted agent tools (worker token).
+- `POST /v1/gateway-deployments/{id}/call-lifecycle-events` — lifecycle + authoritative billing verdict (gateway token).
+- `POST /v1/calls/{id}/artifacts` — upload call artifacts with duration provenance (gateway token).
+- `POST /v1/gateway-deployments/{id}/tokens` / `.../tokens/rotate` — mint / rotate the per-gateway `tgw_` token (shown once).
+- `GET /v1/gateway-deployments/{id}/number-rules` — routing read (also the smoke test's gateway-token probe).
+
+Auth: `Authorization: Bearer` from `OPENPHONEX_GATEWAY_API_TOKEN` (`tgw_...`, narrowly scoped) and `OPENPHONEX_WORKER_API_TOKEN` (organization-scoped; see SECURITY.md). The transport layer requires https (or verified loopback http) and refuses cross-origin redirects.
+
+## Audio contract
+
+`pcm_s16le_8000_mono` — 16-bit little-endian PCM, 8 kHz, mono. No negotiation.
+
+## Safety boundaries
+
+- The agent admits no caller audio before the control plane authorizes the call and its config validates.
+- Tools are model-visible ONLY if allowlisted in realtime-config; every call is auditable at the control plane.
+- Bearer tokens never travel plaintext to non-loopback hosts; cross-origin redirects are refused.
+- The worker token is organization-scoped: protect the host, rotate on suspicion ([SECURITY.md](SECURITY.md)).
+
+## More
+
+- [CONTRIBUTING](CONTRIBUTING.md)
+- [SECURITY](SECURITY.md)
+- [LICENSE](LICENSE)
+- [TRADEMARK](TRADEMARK.md)
+- [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES.md)
+
+
+<!-- ---------------------------------------------------------------- -->
+
+# INSTALL — self-hosted OpenPhonex LiveKit stack
+
+This is the complete, linear install runbook for the **recommended** self-host
+stack: the same media plane OpenPhonex production runs. It is written to be
+executable step by step **by a person or an AI agent** — every step has a
+command, an expected result, and a failure pointer. No step requires
+information that is not defined here or in the referenced file.
+
+Background reading (optional):
+[`packages/openphonex-gateway/deploy/SELFHOST.md`](packages/openphonex-gateway/deploy/SELFHOST.md).
+
+---
+
+## Step 0 — Prerequisites (collect these before touching the host)
+
+| # | You need | How you know you have it |
+|---|---|---|
+| 0.1 | A Linux host with a **public IPv4** and root/sudo | `curl -4 ifconfig.me` prints the IP |
+| 0.2 | Docker Engine + **Compose v2** on that host | `docker compose version` prints a version |
+| 0.3 | A **DID** (phone number) on a SIP trunk that sends calls to your host, plus your carrier's **SIP signaling IP ranges** AND its **RTP / media IP ranges** (from the carrier portal — these are often DIFFERENT range sets) | e.g. DID `+15551230000`, signaling `203.0.113.0/24`, media `203.0.113.128/25` |
+| 0.4 | An **OpenPhonex control plane** URL | OpenPhonex Cloud: `https://api.openphonex.com`, or your own deployment |
+| 0.5 | From that control plane: **organization id**, **gateway deployment id**, **per-gateway token**, **worker API token**, and an **agent + phone-number route** configured for your DID | see the variable table in step 3 for how to mint each |
+| 0.6 | Provider API keys: **Deepgram**, **Gemini**, **ElevenLabs** | from console.deepgram.com / aistudio.google.com / elevenlabs.io |
+| 0.7 | Host firewall able to open `5060/udp` (to the SIP **signaling** ranges) and `10000-10100/udp` (to the RTP **media** ranges) separately | cloud-firewall or `ufw`/`nftables` access |
+
+## Step 1 — Get the code
+
+```bash
+# If you are installing from a fork, replace `skyzer` with your own org/user.
+git clone https://github.com/skyzer/openphonex-gateway.git openphonex-gateway
+cd openphonex-gateway/packages/openphonex-gateway/deploy
+```
+
+**Expect:** you are in a directory containing `docker-compose.livekit.yml`,
+`livekit.yaml.example`, `sip.yaml.example`, `.env.livekit.example`, and
+`selfhost-smoketest.sh`.
+
+## Step 2 — Create the three config files
+
+```bash
+cp livekit.yaml.example livekit.yaml
+cp sip.yaml.example sip.yaml
+cp .env.livekit.example .env.livekit
+chmod 600 livekit.yaml sip.yaml .env.livekit
+mkdir -p sessions call-evidence
+sudo chown -R 10001:10001 sessions call-evidence
+```
+
+Generate the LiveKit API key pair (you invent it; it is local to this stack):
+
+```bash
+echo "key:    opx-selfhost"
+echo "secret: $(openssl rand -hex 32)"
+```
+
+Put the **same pair** in all three files:
+
+- `livekit.yaml` → under `keys:` as `opx-selfhost: <secret>` (replace the
+  `changeme-*` line)
+- `sip.yaml` → `api_key: opx-selfhost` and `api_secret: <secret>`
+- `.env.livekit` → `LIVEKIT_API_KEY=opx-selfhost`,
+  `LIVEKIT_API_SECRET=<secret>`
+
+**Never commit the filled-in files** (the repo `.gitignore` already excludes
+them).
+
+## Step 3 — Fill in every variable in `.env.livekit`
+
+Each variable is also documented inline in the file. Complete reference:
+
+| Variable | What it is | Where to get it | Example |
+|---|---|---|---|
+| `LIVEKIT_URL` | ws URL of this stack's LiveKit. Provisioning requires `wss://` or `ws://` on loopback (a remote `ws://` is refused — it would leak the admin JWT) | default for the host-local stack | `ws://127.0.0.1:7880` |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | the pair from step 2 | you generated it | `opx-selfhost` / 64 hex chars |
+| `OPENPHONEX_CONTROL_PLANE_URL` | control-plane base URL. **Must be `https://`** (the agent refuses plaintext http except to loopback) | step 0.4 | `https://api.openphonex.com` |
+| `OPENPHONEX_GATEWAY_ID` | your gateway deployment id | `POST /v1/gateway-deployments` (or dashboard → Gateways → new self-hosted gateway) | `gw_01HZX...` |
+| `OPENPHONEX_GATEWAY_API_TOKEN` | per-gateway scoped token | `POST /v1/gateway-deployments/{id}/tokens` — shown **once** at mint | `tgw_...` |
+| `OPENPHONEX_WORKER_API_TOKEN` | **organization-scoped** worker token (inbound routing + MCP tools). Protect it; see `SECURITY.md` | dashboard → organization API keys | `tai_...` |
+| `OPENPHONEX_ORGANIZATION_ID` | the org that owns your DID | dashboard → organization settings | `org_01HZX...` |
+| `SCH236_TEST_DID_E164` | the DID this agent answers, **with** `+` | your carrier + registered in OpenPhonex | `+15551230000` |
+| `DEEPGRAM_API_KEY` | STT provider key | console.deepgram.com → API Keys | `...` |
+| `GEMINI_API_KEY` | LLM provider key | aistudio.google.com → Get API key | `...` |
+| `ELEVENLABS_API_KEY` | TTS provider key | elevenlabs.io → Profile → API Keys | `...` |
+| `SCH236_NUM_IDLE_PROCESSES` | warm idle agent processes (optional) | default is fine | `2` |
+| `DIDWW_INBOUND_ADDRESSES` | carrier signaling CIDRs (inbound allowlist for provisioning). **Public** ranges only — the example below is a documentation range and is rejected on purpose | carrier portal → signaling IPs | `203.0.113.0/24,198.51.100.0/28` (replace with your real ranges) |
+
+The `provision` step uses `SCH236_TEST_DID_E164` (above) for the DID — you do
+NOT set the DID twice.
+
+**Optional — outbound trunk** (only to place calls OUT; inbound answering does
+not need it). Supply **all four** or **none**:
+
+| Variable | What it is | Where to get it | Example |
+|---|---|---|---|
+| `DIDWW_OUTBOUND_HOST` | carrier outbound SIP host | carrier portal → SIP trunk | `sip.yourcarrier.com` |
+| `DIDWW_OUTBOUND_FROM_USER` | outbound From-user, digits only | usually your DID | `15551230000` |
+| `DIDWW_OUTBOUND_AUTH_USERNAME` / `DIDWW_OUTBOUND_AUTH_PASSWORD` | outbound trunk auth pair | carrier portal → SIP trunk credentials | `...` |
+
+**Verify** (all required variables non-empty):
+
+```bash
+bash selfhost-smoketest.sh || true   # the config/variable checks at the top must all PASS
+```
+
+## Step 4 — Open the firewall (to your carrier only)
+
+Open the two port ranges to the **matching** carrier ranges — signaling and
+media are often separate range sets, so scope each independently:
+
+- `5060/udp` (SIP signaling) → to the carrier's **signaling** IP ranges.
+- `10000-10100/udp` (RTP media) → to the carrier's **RTP / media** IP ranges.
+
+Do not open them to the world; do not open anything else — LiveKit's API (7880)
+and Redis (6380) bind loopback-only. Note `DIDWW_INBOUND_ADDRESSES` (used by
+provisioning) is the **signaling** allowlist — the RTP ranges only need the
+firewall opening, not a provisioning entry.
+
+## Step 5 — Start the stack
+
+```bash
+docker compose -f docker-compose.livekit.yml up -d --build
+```
+
+**Expect:** the first build takes a few minutes (pip install + model
+pre-download), then five services are up:
+
+```bash
+docker compose -f docker-compose.livekit.yml ps --services --status running
+# -> agents, livekit, reconciler, redis, sip (order may vary)
+```
+
+## Step 6 — Provision the SIP trunk + dispatch rule (one-shot)
+
+```bash
+docker compose -f docker-compose.livekit.yml --profile provision run --rm provision
+```
+
+**Expect:** a final `SELFHOST_PROVISIONED {...}` line (with the
+`dispatch_rule_id`, `inbound_trunk_id`, and `outbound_trunk_id` —
+`not_created` if you left the outbound vars blank).
+**If it prints `SELFHOST_PROVISION_FAILED {...}`:** the JSON `error` field is
+the exact reason (e.g. a missing/malformed variable, or a non-public
+`DIDWW_INBOUND_ADDRESSES` entry). Fix that and rerun.
+
+## Step 7 — Verify everything (the smoke test)
+
+```bash
+bash selfhost-smoketest.sh
+```
+
+**Expect:** `RESULT: PASS` and a per-check `[PASS]` list covering: services
+running, redis PONG, livekit-server answering, **agent registered with
+LiveKit**, **control plane accepts the gateway token**, **control plane
+accepts the worker token**, artifact dirs writable. Every `[FAIL]` line
+prints the exact fix; apply it and re-run until PASS.
+
+## Step 8 — Place a test call
+
+Call your DID from any phone.
+
+**Expect:** the agent answers with its configured first message, and
+
+```bash
+docker compose -f docker-compose.livekit.yml logs -f agents
+```
+
+streams `media_admitted` → per-turn `turn_latency` → `call_complete`.
+Artifacts land in `call-evidence/<call_id>/`; the control plane receives the
+lifecycle/billing events and the uploaded recording + transcript.
+
+**Done.** The stack self-recovers (`restart: unless-stopped`; the
+`reconciler` closes sessions of a crashed agent so no dangling billed
+minutes).
+
+## Troubleshooting
+
+The smoke test localizes almost everything. For the full symptom → fix table
+(agent restart loops, provisioning interlocks, 401/403 token confusion,
+one-way audio, slow first answer, EACCES on artifact dirs) see
+[`SELFHOST.md` → Troubleshooting (LiveKit)](packages/openphonex-gateway/deploy/SELFHOST.md#troubleshooting-livekit).
+
+## Updating
+
+```bash
+git pull
+docker compose -f docker-compose.livekit.yml up -d --build
+bash selfhost-smoketest.sh
+```

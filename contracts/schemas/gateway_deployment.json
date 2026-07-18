@@ -1,0 +1,213 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gateway_deployment.json",
+  "title": "Gateway deployment resource (as-built)",
+  "description": "'pricing' is only attached by the single-resource GET/POST path, not by the list endpoint, so it is optional here. 'health' is an alias of 'gateway_health'.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^gw_"
+    },
+    "organization_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "carrier_account_id": {
+      "type": "string"
+    },
+    "provider_account_id": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string"
+    },
+    "plan_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "region": {
+      "type": "string"
+    },
+    "public_url": {
+      "type": "string"
+    },
+    "local_status_url": {
+      "type": "string"
+    },
+    "monthly_base_minor": {
+      "type": "integer"
+    },
+    "gateway_per_1000_minutes_minor": {
+      "type": "integer"
+    },
+    "included_concurrent_calls": {
+      "type": "integer"
+    },
+    "extra_concurrent_call_minor": {
+      "type": "integer"
+    },
+    "instructions": {
+      "type": "object"
+    },
+    "gateway_version": {
+      "type": "string"
+    },
+    "last_health_status": {
+      "type": "object"
+    },
+    "last_health_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_test_result": {
+      "type": "object"
+    },
+    "gateway_health": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "next_step": {
+          "type": "string"
+        },
+        "next_action": {
+          "type": "string"
+        },
+        "checks": {
+          "type": "object",
+          "properties": {
+            "api": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "media": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "voice_gateway": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "realtime_worker": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "storage": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "last_test": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "api",
+            "media",
+            "voice_gateway",
+            "realtime_worker",
+            "storage",
+            "last_test"
+          ]
+        },
+        "reported_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "public_url": {
+          "type": "string"
+        },
+        "local_status_url": {
+          "type": "string"
+        },
+        "last_test_result": {
+          "type": "object"
+        },
+        "realtime": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "status",
+        "next_step",
+        "next_action",
+        "checks",
+        "version",
+        "public_url",
+        "last_test_result",
+        "realtime"
+      ]
+    },
+    "health": {
+      "type": "object"
+    },
+    "provider_account": {
+      "type": "object"
+    },
+    "deployment_model": {
+      "type": "object"
+    },
+    "pricing": {
+      "type": "object"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "organization_id",
+    "project_id",
+    "carrier_account_id",
+    "provider_account_id",
+    "mode",
+    "plan_id",
+    "status",
+    "region",
+    "public_url",
+    "local_status_url",
+    "monthly_base_minor",
+    "gateway_per_1000_minutes_minor",
+    "included_concurrent_calls",
+    "extra_concurrent_call_minor",
+    "instructions",
+    "gateway_version",
+    "last_health_status",
+    "last_test_result",
+    "gateway_health",
+    "health",
+    "provider_account",
+    "deployment_model",
+    "created_at",
+    "updated_at"
+  ]
+}

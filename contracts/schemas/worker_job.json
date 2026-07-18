@@ -1,0 +1,77 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "worker_job.json",
+  "title": "Worker job resource (as-built)",
+  "description": "Status values written by the code: queued, running, succeeded, failed, blocked (live-call gate), dead (retries exhausted). Left un-enumerated because create_worker_job accepts an arbitrary status parameter internally.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^job_"
+    },
+    "organization_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "result": {
+      "type": "object"
+    },
+    "attempts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "last_error": {
+      "type": "string"
+    },
+    "run_after": {
+      "type": "string"
+    },
+    "locked_by": {
+      "type": "string"
+    },
+    "locked_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "completed_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "organization_id",
+    "kind",
+    "status",
+    "payload",
+    "result",
+    "attempts",
+    "last_error",
+    "run_after",
+    "locked_by",
+    "created_at",
+    "updated_at"
+  ]
+}

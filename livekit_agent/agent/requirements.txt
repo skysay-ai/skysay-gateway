@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+livekit-agents==1.6.5
+livekit-plugins-deepgram==1.6.5
+livekit-plugins-elevenlabs==1.6.5
+livekit-plugins-google==1.6.5
+livekit-plugins-silero==1.6.5
+livekit-plugins-turn-detector==1.6.5

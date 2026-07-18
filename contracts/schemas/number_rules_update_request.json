@@ -1,0 +1,107 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "number_rules_update_request.json",
+  "title": "PATCH /v1/numbers/{id}/number-rules request body (as-built)",
+  "description": "Also served at /v1/phone-numbers/{id}/number-rules. Sections are merged over the current rules; every field is optional. send_to_my_phone_server requires a VERIFIED phone_server_id in the same workspace; forward_to_phone_number requires a phone_number. Updates supersede the previous number_routes row and write a route_changes entry.",
+  "type": "object",
+  "properties": {
+    "incoming": {
+      "type": "object",
+      "properties": {
+        "when_called": {
+          "type": "string",
+          "enum": [
+            "answer_with_openphonex_agent",
+            "send_live_audio_to_my_app",
+            "send_to_my_phone_server",
+            "forward_to_phone_number",
+            "disabled"
+          ],
+          "description": "Alias: type."
+        },
+        "agent_id": {
+          "type": "string"
+        },
+        "agent_endpoint_id": {
+          "type": "string"
+        },
+        "phone_server_id": {
+          "type": "string",
+          "description": "Alias: server_id."
+        },
+        "phone_number": {
+          "type": "string",
+          "description": "Alias: forward_to_phone_number. E.164 destination for pstn_forward."
+        },
+        "fallback": {
+          "type": "object"
+        }
+      }
+    },
+    "outgoing": {
+      "type": "object",
+      "properties": {
+        "can_be_used_as_caller_id": {
+          "type": "boolean"
+        },
+        "allowed_agents": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "allowed_countries": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "max_concurrent_calls": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "recording": {
+      "type": "object",
+      "description": "Alias: recording_and_consent.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "consent_state": {
+          "type": "string"
+        },
+        "retention_days": {
+          "type": "integer"
+        }
+      }
+    },
+    "recording_and_consent": {
+      "type": "object"
+    },
+    "fallback": {
+      "type": "object"
+    },
+    "change_type": {
+      "type": "string",
+      "description": "Defaults to number_rules.updated."
+    }
+  },
+  "required": []
+}
