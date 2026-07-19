@@ -46,6 +46,46 @@ class IncompleteArtifactEvidence(RuntimeError):
     """The caller-side PR #79 artifact set is incomplete."""
 
 
+@dataclass(frozen=True)
+class OutboundDispatch:
+    call_id: str
+    agent_id: str
+    from_number_id: str
+    from_e164: str
+    to_e164: str
+    participant_identity: str
+
+
+def parse_outbound_dispatch(metadata: str) -> OutboundDispatch | None:
+    """Parse non-secret LiveKit dispatch metadata for an outbound call."""
+
+    if not metadata:
+        return None
+    try:
+        payload = json.loads(metadata)
+    except json.JSONDecodeError as exc:
+        raise ValueError("LiveKit dispatch metadata must be valid JSON") from exc
+    if not isinstance(payload, dict) or payload.get("schema") != "openphonex.outbound-dispatch.v1":
+        return None
+    fields = {
+        name: str(payload.get(name) or "").strip()
+        for name in (
+            "call_id",
+            "agent_id",
+            "from_number_id",
+            "from_e164",
+            "to_e164",
+            "participant_identity",
+        )
+    }
+    missing = [name for name, value in fields.items() if not value]
+    if missing:
+        raise ValueError(f"outbound dispatch omitted required fields: {', '.join(missing)}")
+    if not fields["from_e164"].startswith("+") or not fields["to_e164"].startswith("+"):
+        raise ValueError("outbound dispatch numbers must use E.164 format")
+    return OutboundDispatch(**fields)
+
+
 class JsonTransport(Protocol):
     def request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
@@ -467,6 +507,45 @@ class Gate2ControlPlaneAdapter:
             config=config,
             from_number_id=from_number_id,
             to_e164=to_e164,
+        )
+
+    def resume_authorized_outbound(
+        self,
+        *,
+        call_id: str,
+        agent_id: str,
+        from_number_id: str,
+        to_e164: str,
+    ) -> Gate2CallSession:
+        """Resume a call whose single-use authorization was consumed by the dialer.
+
+        The production agent receives only identifiers in LiveKit dispatch
+        metadata. The control plane verifies that this gateway consumed the
+        call-bound authorization before returning the effective per-call
+        realtime config.
+        """
+
+        config = self.transport.request("GET", f"/v1/calls/{call_id}/realtime-config")
+        _validate_realtime_config(config, expected_agent_id=agent_id)
+        if config.get("call_id") != call_id or config.get("direction") != "outbound":
+            raise ControlPlaneRejected("call realtime config is not bound to this outbound call")
+        return Gate2CallSession(
+            transport=self.transport,
+            authorization_transport=self.transport,
+            tool_transport=self.tool_transport,
+            call_id=call_id,
+            gateway_id=self.gateway_id,
+            authorization_call_id=call_id,
+            call_authorization_token="",
+            config=config,
+            from_number_id=from_number_id,
+            to_e164=to_e164,
+            media_admitted=True,
+            audit_events=[
+                "authorization_consumed_by_originator",
+                "realtime_config_loaded",
+                "media_admitted",
+            ],
         )
 
     def prepare_inbound(

@@ -13,6 +13,7 @@ from livekit_agent.control_plane import (
     SessionStateError,
     UrllibJsonTransport,
     _SameOriginRedirectHandler,
+    parse_outbound_dispatch,
 )
 from livekit_agent.evidence_contract import semantic_response_audio_policy
 
@@ -64,6 +65,22 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
             gateway_id="gateway_1",
             transport=transport,
         )
+
+    def test_outbound_dispatch_contains_identifiers_but_no_credentials(self) -> None:
+        metadata = json.dumps({
+            "schema": "openphonex.outbound-dispatch.v1",
+            "call_id": "call_1",
+            "agent_id": "agent_1",
+            "from_number_id": "number_1",
+            "from_e164": "+15551230000",
+            "to_e164": "+37255509999",
+            "participant_identity": "pstn-call_1",
+        })
+        dispatch = parse_outbound_dispatch(metadata)
+        self.assertEqual(dispatch.call_id, "call_1")
+        self.assertIsNone(parse_outbound_dispatch(""))
+        with self.assertRaisesRegex(ValueError, "omitted required fields"):
+            parse_outbound_dispatch(json.dumps({"schema": "openphonex.outbound-dispatch.v1"}))
 
     def test_policy_authorization_and_config_precede_media(self) -> None:
         transport = FakeTransport(
@@ -147,6 +164,27 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_authorized_outbound_resume_fetches_call_bound_config(self) -> None:
+        config = {**_config(), "call_id": "call_1", "direction": "outbound"}
+        transport = FakeTransport([config])
+
+        session = self._adapter(transport).resume_authorized_outbound(
+            call_id="call_1",
+            agent_id="agent_1",
+            from_number_id="number_1",
+            to_e164="+15551230001",
+        )
+
+        self.assertTrue(session.media_admitted)
+        self.assertEqual(session.call_id, "call_1")
+        self.assertEqual(
+            transport.calls,
+            [("GET", "/v1/calls/call_1/realtime-config", None)],
+        )
+        # Already consumed by the originator: no second consume request.
+        session.admit_media()
+        self.assertEqual(len(transport.calls), 1)
 
     def test_inbound_route_policy_resolves_agent_before_media(self) -> None:
         transport = FakeTransport(

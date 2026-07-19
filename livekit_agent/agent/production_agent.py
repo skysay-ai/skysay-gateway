@@ -23,7 +23,7 @@ from livekit.agents import (
 )
 from livekit.agents.voice.room_io import RoomOptions
 
-from control_plane import Gate2ControlPlaneAdapter, UrllibJsonTransport
+from control_plane import Gate2ControlPlaneAdapter, UrllibJsonTransport, parse_outbound_dispatch
 from demo import build_demo_stack
 from prewarm import prewarm_plugin_modules, resolve_idle_process_count
 from livekit_evidence import SynchronizedEvidenceRecorder
@@ -166,19 +166,33 @@ async def production_agent(ctx: JobContext) -> None:
     # unsubscribed and cannot consume caller audio until the control plane has
     # resolved the number route and semantic config.
     await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
+    outbound = parse_outbound_dispatch(str(getattr(ctx.job, "metadata", "") or ""))
     participant = await ctx.wait_for_participant()
     attributes = dict(participant.attributes or {})
     caller = str(attributes.get("sip.phoneNumber") or attributes.get("sip.from") or "unknown")
     provider_call_id = str(attributes.get("sip.callID") or participant.identity)
-    to_e164 = os.environ["SCH236_TEST_DID_E164"]
     adapter = build_adapter()
-    call = await asyncio.to_thread(
-        adapter.prepare_inbound,
-        organization_id=os.environ["OPENPHONEX_ORGANIZATION_ID"],
-        to_e164=to_e164,
-        from_e164=caller,
-        provider_call_id=provider_call_id,
-    )
+    if outbound is not None:
+        if participant.identity != outbound.participant_identity:
+            raise ValueError("outbound SIP participant identity does not match dispatch")
+        if str(attributes.get("openphonex.call_id") or "") != outbound.call_id:
+            raise ValueError("outbound SIP participant is not bound to the dispatched call")
+        caller = outbound.to_e164
+        call = await asyncio.to_thread(
+            adapter.resume_authorized_outbound,
+            call_id=outbound.call_id,
+            agent_id=outbound.agent_id,
+            from_number_id=outbound.from_number_id,
+            to_e164=outbound.to_e164,
+        )
+    else:
+        call = await asyncio.to_thread(
+            adapter.prepare_inbound,
+            organization_id=os.environ["OPENPHONEX_ORGANIZATION_ID"],
+            to_e164=os.environ["SCH236_TEST_DID_E164"],
+            from_e164=caller,
+            provider_call_id=provider_call_id,
+        )
     profile = profile_from_realtime_config(call.config)
     call.admit_media()
     for publication in participant.track_publications.values():
@@ -220,6 +234,7 @@ async def production_agent(ctx: JobContext) -> None:
         event_type="sip.answered",
         source_component="livekit_sip",
         observed_at=started_at,
+        details={"provider_call_id": provider_call_id},
     )
     await asyncio.to_thread(
         call.report_lifecycle,

@@ -32,7 +32,7 @@ pulls directly from their upstreams:
 | LiveKit server (`livekit/livekit-server`) | Apache-2.0 | WebRTC/media control plane of the stack | No (image) |
 | LiveKit SIP (`livekit/sip`) | Apache-2.0 | SIP↔LiveKit bridge for carrier trunks | No (image) |
 | livekit-agents + provider plugins | Apache-2.0 | The agent framework the media agent runs on | No (pip) |
-| Redis (`redis:7.4`) | RSALv2 / SSPLv1 (upstream dual license) | Host-local message bus for LiveKit | No (image) |
+| Redis (`redis:8.8`) | AGPLv3 / RSALv2 / SSPLv1 (upstream tri-license; AGPLv3 is OSI-approved as of Redis 8) | Host-local message bus for LiveKit | No (image) |
 
 ## External services (descriptive references only)
 

@@ -9,12 +9,11 @@ dependencies = [
     "openphonex-common",
     # Deepgram live streaming STT transport (openphonex_gateway.realtime.
     # deepgram_streaming_stt imports `websocket`). A genuine core runtime
-    # dependency — the worker enumerates it in runtime_dependency_status() and
-    # fails closed when the deepgram STT provider is selected without it. Kept
+    # dependency — callers enumerate it in runtime_dependency_status() and
+    # fail closed when the deepgram STT provider is selected without it. Kept
     # out of the optional [local] extras on purpose so the base install (and the
     # public gateway-only CI, which installs no extras) can run the Deepgram
-    # provider path. The ARI event WebSocket is a stdlib handshake and needs no
-    # third-party client.
+    # provider path.
     "websocket-client>=1.8",
 ]
 

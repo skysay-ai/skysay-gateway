@@ -138,9 +138,15 @@ class ProvisionConfigError(RuntimeError):
 @dataclass(frozen=True)
 class OutboundSettings:
     host: str
-    from_user: str
+    from_users: tuple[str, ...]
     auth_username: str
     auth_password: str
+
+    @property
+    def from_user(self) -> str:
+        """Backward-compatible primary caller ID."""
+
+        return self.from_users[0]
 
 
 @dataclass(frozen=True)
@@ -212,9 +218,17 @@ def load_settings(environ: dict[str, str] | None = None) -> SelfhostSettings:
         host = _required("DIDWW_OUTBOUND_HOST", environ).lower()
         if _HOSTNAME.fullmatch(host) is None:
             raise ProvisionConfigError("DIDWW_OUTBOUND_HOST must be a DNS hostname, e.g. sip.yourcarrier.com")
-        from_user = _required("DIDWW_OUTBOUND_FROM_USER", environ).removeprefix("+")
-        if _E164_DIGITS.fullmatch(from_user) is None:
-            raise ProvisionConfigError("DIDWW_OUTBOUND_FROM_USER must contain E.164 digits")
+        from_users = tuple(
+            item.strip().removeprefix("+")
+            for item in _required("DIDWW_OUTBOUND_FROM_USER", environ).split(",")
+            if item.strip()
+        )
+        if not from_users or any(_E164_DIGITS.fullmatch(value) is None for value in from_users):
+            raise ProvisionConfigError(
+                "DIDWW_OUTBOUND_FROM_USER must contain one or more comma-separated E.164 numbers"
+            )
+        if len(set(from_users)) != len(from_users):
+            raise ProvisionConfigError("DIDWW_OUTBOUND_FROM_USER contains duplicate caller IDs")
         auth_username = _required("DIDWW_OUTBOUND_AUTH_USERNAME", environ)
         auth_password = _required("DIDWW_OUTBOUND_AUTH_PASSWORD", environ)
         for name, value in (
@@ -225,7 +239,7 @@ def load_settings(environ: dict[str, str] | None = None) -> SelfhostSettings:
                 raise ProvisionConfigError(f"{name} contains control characters")
         outbound = OutboundSettings(
             host=host,
-            from_user=from_user,
+            from_users=from_users,
             auth_username=auth_username,
             auth_password=auth_password,
         )
@@ -283,7 +297,7 @@ async def provision(*, api_module: Any | None = None, environ: dict[str, str] | 
                         address=settings.outbound.host,
                         from_host=settings.outbound.host,
                         transport=api_module.SIPTransport.SIP_TRANSPORT_UDP,
-                        numbers=[settings.outbound.from_user],
+                        numbers=list(settings.outbound.from_users),
                         auth_username=settings.outbound.auth_username,
                         auth_password=settings.outbound.auth_password,
                         media=api_module.SIPMediaConfig(

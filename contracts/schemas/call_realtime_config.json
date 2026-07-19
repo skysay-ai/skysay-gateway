@@ -1,0 +1,98 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openphonex.com/contracts/gateway-v1/call_realtime_config.json",
+  "title": "CallRealtimeConfig",
+  "type": "object",
+  "required": [
+    "call_id",
+    "direction",
+    "agent_id",
+    "organization_id",
+    "project_id",
+    "language",
+    "system_prompt",
+    "first_message",
+    "tools",
+    "recording_enabled",
+    "transcriber",
+    "model",
+    "voice"
+  ],
+  "properties": {
+    "call_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "direction": {
+      "const": "outbound"
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "organization_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "language": {
+      "enum": [
+        "en",
+        "et"
+      ]
+    },
+    "system_prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "first_message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "recording_enabled": {
+      "const": true
+    },
+    "transcriber": {
+      "type": "object"
+    },
+    "model": {
+      "type": "object"
+    },
+    "voice": {
+      "type": "object"
+    },
+    "cost": {
+      "type": "object"
+    },
+    "latency": {
+      "type": "object"
+    },
+    "selectable": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array"
+    },
+    "media_stack": {
+      "type": "string"
+    },
+    "turn_taking": {
+      "type": "object"
+    },
+    "voice_polish": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

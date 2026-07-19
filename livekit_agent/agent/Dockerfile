@@ -7,11 +7,12 @@
 # This is the minimal RUNTIME image for the self-host stack: the same pinned
 # base image, dependency install, and entrypoint hardening as the production
 # voice box, COPYing only the runtime import closure of the three self-host
-# entrypoints (production_agent.py, reconcile_sessions.py, provision_demo.py).
+# entrypoints (production_agent.py, outbound_worker.py,
+# reconcile_sessions.py, provision_selfhost.py).
 # The internal qualification/demo tooling that the private production image
 # additionally carries is deliberately absent. Export tests assert the FROM
 # pin matches production and that the COPY set covers the import closure.
-FROM python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7
+FROM python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -24,7 +25,7 @@ RUN pip install --no-cache-dir --requirement /app/requirements.txt
 USER agent
 RUN python -m livekit.agents download-files
 USER root
-COPY agent/production_agent.py agent/reconcile_sessions.py agent/provision_selfhost.py /app/
+COPY agent/production_agent.py agent/outbound_worker.py agent/reconcile_sessions.py agent/provision_selfhost.py /app/
 COPY control_plane.py demo.py evidence_contract.py latency_evidence.py livekit_evidence.py prewarm.py production.py reconciliation.py /app/
 COPY agent/carrier-entrypoint.sh /app/carrier-entrypoint.sh
 RUN chmod 0555 /app/carrier-entrypoint.sh

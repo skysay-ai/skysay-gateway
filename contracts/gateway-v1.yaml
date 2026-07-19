@@ -732,6 +732,39 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /v1/calls/{call_id}/realtime-config:
+    get:
+      tags: [as-built]
+      x-status: stable
+      operationId: getOutboundCallRealtimeConfig
+      summary: Resolve the authoritative realtime config for an authorized outbound call
+      description: |
+        The production media agent calls this after the LiveKit originator has
+        consumed the call's single-use, destination-bound authorization. A
+        gateway token may read only calls in its organization and only when the
+        consumed authorization belongs to that same gateway. The response
+        merges the selected agent with the call's bounded instructions,
+        first-message, and language overrides. No prompt or bearer credential
+        needs to travel through SIP, participant attributes, or room metadata.
+      x-required-scopes: ["gateways:report"]
+      x-json-schema:
+        response: contracts/schemas/call_realtime_config.json
+      parameters:
+        - name: call_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Effective, call-bound production voice configuration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallRealtimeConfig"
+        default:
+          $ref: "#/components/responses/Error"
+
 components:
   securitySchemes:
     orgApiKey:
@@ -821,6 +854,38 @@ components:
         error: {type: string}
         message: {type: string}
       required: [error, message]
+
+    CallRealtimeConfig:
+      type: object
+      x-json-schema-file: call_realtime_config.json
+      properties:
+        call_id: {type: string}
+        direction: {type: string, const: outbound}
+        agent_id: {type: string}
+        organization_id: {type: string}
+        project_id: {type: string}
+        language: {type: string, enum: [en, et]}
+        system_prompt: {type: string}
+        first_message: {type: string}
+        tools: {type: array, items: {type: string}}
+        recording_enabled: {type: boolean}
+        transcriber: {type: object}
+        model: {type: object}
+        voice: {type: object}
+      required:
+        - call_id
+        - direction
+        - agent_id
+        - organization_id
+        - project_id
+        - language
+        - system_prompt
+        - first_message
+        - tools
+        - recording_enabled
+        - transcriber
+        - model
+        - voice
 
     GatewayDeploymentCreateRequest:
       type: object

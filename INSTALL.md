@@ -75,7 +75,7 @@ Each variable is also documented inline in the file. Complete reference:
 | `OPENPHONEX_CONTROL_PLANE_URL` | control-plane base URL. **Must be `https://`** (the agent refuses plaintext http except to loopback) | step 0.4 | `https://api.openphonex.com` |
 | `OPENPHONEX_GATEWAY_ID` | your gateway deployment id | `POST /v1/gateway-deployments` (or dashboard → Gateways → new self-hosted gateway) | `gw_01HZX...` |
 | `OPENPHONEX_GATEWAY_API_TOKEN` | per-gateway scoped token | `POST /v1/gateway-deployments/{id}/tokens` — shown **once** at mint | `tgw_...` |
-| `OPENPHONEX_WORKER_API_TOKEN` | **organization-scoped** worker token (inbound routing + MCP tools). Protect it; see `SECURITY.md` | dashboard → organization API keys | `tai_...` |
+| `OPENPHONEX_WORKER_API_TOKEN` | **organization-scoped** worker token (inbound routing + MCP tools; outbound also needs `calls:write`, `worker_jobs:read`, `worker_jobs:write`). Protect it; see `SECURITY.md` | dashboard → organization API keys | `tai_...` |
 | `OPENPHONEX_ORGANIZATION_ID` | the org that owns your DID | dashboard → organization settings | `org_01HZX...` |
 | `SCH236_TEST_DID_E164` | the DID this agent answers, **with** `+` | your carrier + registered in OpenPhonex | `+15551230000` |
 | `DEEPGRAM_API_KEY` | STT provider key | console.deepgram.com → API Keys | `...` |
@@ -93,8 +93,14 @@ not need it). Supply **all four** or **none**:
 | Variable | What it is | Where to get it | Example |
 |---|---|---|---|
 | `DIDWW_OUTBOUND_HOST` | carrier outbound SIP host | carrier portal → SIP trunk | `sip.yourcarrier.com` |
-| `DIDWW_OUTBOUND_FROM_USER` | outbound From-user, digits only | usually your DID | `15551230000` |
+| `DIDWW_OUTBOUND_FROM_USER` | one or more allowed outbound From-users, comma-separated, digits only | your caller-ID DID(s) | `15551230000,37255501234` |
 | `DIDWW_OUTBOUND_AUTH_USERNAME` / `DIDWW_OUTBOUND_AUTH_PASSWORD` | outbound trunk auth pair | carrier portal → SIP trunk credentials | `...` |
+| `OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND` | second fail-closed execution gate; leave `0` until provisioning + smoke tests pass | you | `0`, then `1` at cutover |
+| `OPENPHONEX_OUTBOUND_WORKER_ID` | stable identity recorded when claiming jobs | choose a unique name per worker | `livekit-outbound-1` |
+| `OPENPHONEX_OUTBOUND_TRUNK_NAME` | LiveKit outbound trunk the worker must match | provisioner default | `openphonex-selfhost-outbound` |
+| `OPENPHONEX_OUTBOUND_POLL_SECONDS` | queue poll interval | default is fine | `2` |
+| `OPENPHONEX_OUTBOUND_RINGING_TIMEOUT_SECONDS` | stop unanswered ringing after this many seconds (5–120) | your operating policy | `45` |
+| `OPENPHONEX_OUTBOUND_MAX_CALL_DURATION_SECONDS` | hard LiveKit SIP call cap (30–14400) | your operating policy | `1800` |
 
 **Verify** (all required variables non-empty):
 
@@ -141,6 +147,19 @@ docker compose -f docker-compose.livekit.yml --profile provision run --rm provis
 **If it prints `SELFHOST_PROVISION_FAILED {...}`:** the JSON `error` field is
 the exact reason (e.g. a missing/malformed variable, or a non-public
 `DIDWW_INBOUND_ADDRESSES` entry). Fix that and rerun.
+
+For outbound, first verify the worker without claiming a call:
+
+```bash
+docker compose -f docker-compose.livekit.yml --profile outbound run --rm outbound-worker python /app/outbound_worker.py --status
+```
+
+After that succeeds and you intend to place live calls, set
+`OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND=1` and start the profile:
+
+```bash
+docker compose -f docker-compose.livekit.yml --profile outbound up -d outbound-worker
+```
 
 ## Step 7 — Verify everything (the smoke test)
 

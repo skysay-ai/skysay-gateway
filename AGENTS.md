@@ -22,8 +22,9 @@ Rules:
 4. Every environment variable is documented (what / where to get it /
    example) in `INSTALL.md` step 3 and inline in `.env.livekit.example`.
    There are no undocumented variables.
-5. The success criterion is **step 8**: a real phone call to the DID is
-   answered and `call_complete` appears in the agents log.
+5. The inbound success criterion is **step 8**: a real phone call to the DID is
+   answered and `call_complete` appears in the agents log. For outbound, also
+   run the profile-gated worker status check before enabling its execution gate.
 
 ## If your task is: understand or modify the code
 

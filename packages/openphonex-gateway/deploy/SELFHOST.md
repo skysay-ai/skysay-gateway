@@ -19,7 +19,7 @@ control-plane contract.
                     |
         UDP 5060 + RTP 10000-10100
                     v
-  [ livekit-sip v1.7.0 ] --- [ livekit-server v1.13.3 ] --- [ redis 7.4.5 ]
+  [ livekit-sip v1.7.0 ] --- [ livekit-server v1.13.4 ] --- [ redis 8.8.0 ]
                     \                 |
                      \                | (agent dispatch, host-local)
                       v               v
@@ -36,10 +36,10 @@ export test):
 
 | Component | Version |
 |---|---|
-| `livekit/livekit-server` | `v1.13.3` (digest-pinned) |
+| `livekit/livekit-server` | `v1.13.4` (digest-pinned) |
 | `livekit/sip` | `v1.7.0` (digest-pinned) |
-| `redis` | `7.4.5-alpine` (digest-pinned) |
-| `livekit-agents` + Deepgram/Google/ElevenLabs/Silero/turn-detector plugins | `1.6.5` (pip-pinned in `livekit_agent/agent/requirements.txt`) |
+| `redis` | `8.8.0-alpine` (digest-pinned) |
+| `livekit-agents` + Deepgram/Google/ElevenLabs/Silero/turn-detector plugins | `1.6.6` (pip-pinned in `livekit_agent/agent/requirements.txt`) |
 | Voice pipeline | Deepgram nova-3 → Gemini → ElevenLabs (resolved per call from realtime-config) |
 
 ## 0. What you need first
@@ -88,7 +88,8 @@ Then fill them in:
      purpose (so you can't provision an allowlist no real call matches).
    - Outbound trunk vars (`DIDWW_OUTBOUND_*`) are **optional** — set all four
      to also create an outbound trunk, or leave all four blank for
-     inbound-only.
+     inbound-only. `DIDWW_OUTBOUND_FROM_USER` accepts comma-separated caller
+     IDs when your carrier permits more than one From number.
 
 ## 2. Bring the stack up
 
@@ -110,6 +111,19 @@ carrier allowlist with LiveKit SIP (and an outbound trunk if you set the
 optional `DIDWW_OUTBOUND_*` vars); rerun it only when the DID or the carrier IP
 ranges change. If it prints `SELFHOST_PROVISION_FAILED {...}`, the JSON `error`
 field states the exact reason — see [Troubleshooting](#troubleshooting-livekit).
+
+### Outbound calling
+
+The `outbound-worker` compose profile claims only policy-approved
+`call.outbound_originate` jobs. It consumes the call's short-lived,
+destination-bound authorization before dialing and explicitly dispatches the
+production agent into the LiveKit room. Per-call instructions, opening line,
+and language are fetched from OpenPhonex by call ID; they are never trusted
+from SIP or room metadata.
+
+Keep `OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND=0` while staging. Run the worker
+`--status` command from `INSTALL.md`; after it succeeds, set the gate to `1`
+and start `docker compose --profile outbound up -d outbound-worker`.
 
 ## 4. Verify — run the smoke test
 
@@ -249,4 +263,3 @@ change — they are enforced equal by the release tests.
 - **`EACCES`/permission errors on `sessions/` or `call-evidence/`:**
   `sudo chown -R 10001:10001 sessions call-evidence` (the agent drops to
   uid 10001 before writing).
-

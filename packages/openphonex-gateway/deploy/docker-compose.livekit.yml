@@ -8,7 +8,7 @@
 # (prepare_inbound -> realtime-config; see SELFHOST.md).
 #
 #   services: redis + livekit-server + livekit-sip + agents + reconciler
-#             (+ a one-shot, profile-gated `provision` bootstrap)
+#             (+ profile-gated `outbound-worker` and one-shot `provision`)
 #
 # Quickstart (full runbook: SELFHOST.md; step-by-step: repo-root INSTALL.md):
 #   cp livekit.yaml.example livekit.yaml       # fill in your LiveKit API key pair
@@ -33,7 +33,7 @@ name: openphonex-livekit-selfhost
 services:
   redis:
     # Same pin as the production voice box.
-    image: redis:7.4.5-alpine@sha256:bb186d083732f669da90be8b0f975a37812b15e913465bb14d845db72a4e3e08
+    image: redis:8.8.0-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
     command: [redis-server, --bind, 127.0.0.1, --port, "6380", --save, "", --appendonly, "no"]
     network_mode: host
     restart: unless-stopped
@@ -44,8 +44,8 @@ services:
       retries: 30
 
   livekit:
-    # Same pin as the production voice box (livekit-server v1.13.3).
-    image: livekit/livekit-server:v1.13.3@sha256:483b8b7b5b0654f91f1e8bdc7b46fcd37fd9911612ecf627f97e3185a89825bd
+    # Same pin as the production voice box (livekit-server v1.13.4).
+    image: livekit/livekit-server:v1.13.4@sha256:189f7c81b704a36642bc5c7e2d3e1ae83744627c11978a23a251bf19fbec64e0
     command: [--config, /run/sch236/livekit.yaml]
     network_mode: host
     restart: unless-stopped
@@ -107,11 +107,13 @@ services:
 
   reconciler:
     # Orphan/crash reconciliation: closes stale sessions against the control
-    # plane so a killed agent can never leave dangling billed minutes.
-    build:
-      context: ${LIVEKIT_AGENT_CONTEXT:-../../../livekit_agent}
-      dockerfile: agent/Dockerfile
+    # plane so a killed agent can never leave dangling billed minutes. No
+    # `build:` here: it reuses the image `agents` builds (same Dockerfile,
+    # same tag). A second build: block on this tag raced the agents build on
+    # `docker compose up -d --build` and failed with "image ... already
+    # exists".
     image: openphonex-livekit-agent:selfhost
+    pull_policy: never   # image is built by the `agents` service; never try to pull it (works on Compose < 2.13 too)
     entrypoint: [/app/carrier-entrypoint.sh]
     command: [python, /app/reconcile_sessions.py]
     user: "0:0"
@@ -132,16 +134,40 @@ services:
       livekit:
         condition: service_started
 
+  outbound-worker:
+    # Claims policy-approved call.outbound_originate jobs, consumes the
+    # destination-bound single-use authorization, then dials through LiveKit
+    # SIP and explicitly dispatches the production agent. Profile-gated so an
+    # inbound-only deployment never starts an originator by accident.
+    profiles: [outbound]
+    image: openphonex-livekit-agent:selfhost
+    pull_policy: never
+    entrypoint: [/app/carrier-entrypoint.sh]
+    command: [python, /app/outbound_worker.py, --watch]
+    user: "0:0"
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ./.env.livekit
+        target: /run/sch172/carrier.env
+        read_only: true
+    depends_on:
+      agents:
+        condition: service_started
+      sip:
+        condition: service_started
+
   provision:
     # One-shot LiveKit SIP bootstrap (inbound trunk + dispatch rule for your
     # DID). Profile-gated: run it once after the stack is up, and again only
     # when the DID / carrier allowlist changes:
     #   docker compose -f docker-compose.livekit.yml --profile provision run --rm provision
     profiles: [provision]
-    build:
-      context: ${LIVEKIT_AGENT_CONTEXT:-../../../livekit_agent}
-      dockerfile: agent/Dockerfile
+    # No `build:` here either — it reuses the image `agents` builds; see the
+    # reconciler comment above.
     image: openphonex-livekit-agent:selfhost
+    pull_policy: never   # image is built by the `agents` service; never try to pull it (works on Compose < 2.13 too)
     entrypoint: [/app/carrier-entrypoint.sh]
     command: [python, /app/provision_selfhost.py]
     user: "0:0"

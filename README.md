@@ -21,7 +21,7 @@ per-call config · lifecycle/billing events · artifact upload.
                     |
         UDP 5060 + RTP 10000-10100
                     v
-  [ livekit-sip v1.7.0 ] --- [ livekit-server v1.13.3 ] --- [ redis 7.4.5 ]
+  [ livekit-sip v1.7.0 ] --- [ livekit-server v1.13.4 ] --- [ redis 8.8.0 ]
                     \                 |
                      \                | (agent dispatch, host-local)
                       v               v
@@ -64,8 +64,8 @@ bash selfhost-smoketest.sh   # PASS/FAIL per check; PASS = call-ready
 ```
 
 Pinned components (same tag **and** digest as production — enforced by
-release tests): livekit-server v1.13.3, livekit-sip v1.7.0, redis 7.4.5,
-livekit-agents 1.6.5 (+ Deepgram/Google/ElevenLabs/Silero/turn-detector
+release tests): livekit-server v1.13.4, livekit-sip v1.7.0, redis 8.8.0,
+livekit-agents 1.6.6 (+ Deepgram/Google/ElevenLabs/Silero/turn-detector
 plugins, pip-pinned in
 [`livekit_agent/agent/requirements.txt`](livekit_agent/agent/requirements.txt)).
 
