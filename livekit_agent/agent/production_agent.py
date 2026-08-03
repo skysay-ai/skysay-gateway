@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import time
 import wave
 from datetime import datetime, timezone
@@ -26,13 +27,15 @@ from livekit.agents.voice.room_io import RoomOptions
 from control_plane import Gate2ControlPlaneAdapter, UrllibJsonTransport, parse_outbound_dispatch
 from demo import build_demo_stack
 from prewarm import prewarm_plugin_modules, resolve_idle_process_count
-from livekit_evidence import SynchronizedEvidenceRecorder
+from livekit_evidence import NoRoomAudioCaptured, SynchronizedEvidenceRecorder
 from latency_evidence import TurnLatencyRecorder
 from evidence_contract import effective_voice_stack_identity
 from production import (
     build_livekit_model_tools,
     executed_tool_names,
+    inbound_sip_identity,
     is_greeting_fragment,
+    post_livekit_worker_heartbeat,
     profile_from_realtime_config,
 )
 
@@ -66,11 +69,15 @@ def _transport(token_variable: str) -> UrllibJsonTransport:
 
 
 def build_adapter() -> Gate2ControlPlaneAdapter:
+    platform_token = os.environ.get("OPENPHONEX_PLATFORM_MEDIA_TOKEN", "").strip()
     return Gate2ControlPlaneAdapter(
         gateway_id=os.environ["OPENPHONEX_GATEWAY_ID"],
         transport=_transport("OPENPHONEX_GATEWAY_API_TOKEN"),
         call_transport=_transport("OPENPHONEX_WORKER_API_TOKEN"),
         tool_transport=_transport("OPENPHONEX_WORKER_API_TOKEN"),
+        platform_transport=(
+            _transport("OPENPHONEX_PLATFORM_MEDIA_TOKEN") if platform_token else None
+        ),
     )
 
 
@@ -91,11 +98,63 @@ def setup_process(process: JobProcess) -> None:
     from livekit.plugins import silero
 
     process.userdata["vad"] = silero.VAD.load(min_silence_duration=0.25)
+    _start_process_heartbeat(process)
     emit(
         "process_warm",
         components=warmed,
         failed=[{"module": name, "error": error} for name, error in failed],
     )
+
+
+def _start_process_heartbeat(process: JobProcess) -> None:
+    base_url = str(os.environ.get("OPENPHONEX_CONTROL_PLANE_URL") or "").strip()
+    worker_token = str(os.environ.get("OPENPHONEX_WORKER_API_TOKEN") or "").strip()
+    if not base_url or not worker_token:
+        emit(
+            "worker_heartbeat_disabled",
+            missing=[
+                name
+                for name, value in (
+                    ("OPENPHONEX_CONTROL_PLANE_URL", base_url),
+                    ("OPENPHONEX_WORKER_API_TOKEN", worker_token),
+                )
+                if not value
+            ],
+        )
+        return
+    try:
+        interval_seconds = max(
+            10.0,
+            float(os.environ.get("OPENPHONEX_WORKER_HEARTBEAT_SECONDS", "30")),
+        )
+    except ValueError:
+        interval_seconds = 30.0
+    transport = UrllibJsonTransport(
+        base_url=base_url,
+        bearer_token=worker_token,
+    )
+    stop = threading.Event()
+
+    def heartbeat_loop() -> None:
+        while not stop.is_set():
+            try:
+                post_livekit_worker_heartbeat(
+                    transport,
+                    os.environ,
+                    process_id=os.getpid(),
+                )
+            except Exception as exc:
+                emit("worker_heartbeat_failed", error=type(exc).__name__)
+            stop.wait(interval_seconds)
+
+    thread = threading.Thread(
+        target=heartbeat_loop,
+        name="openphonex-worker-heartbeat",
+        daemon=True,
+    )
+    process.userdata["worker_heartbeat_stop"] = stop
+    process.userdata["worker_heartbeat_thread"] = thread
+    thread.start()
 
 
 async def start_evidence_sidecar(
@@ -170,7 +229,7 @@ async def production_agent(ctx: JobContext) -> None:
     participant = await ctx.wait_for_participant()
     attributes = dict(participant.attributes or {})
     caller = str(attributes.get("sip.phoneNumber") or attributes.get("sip.from") or "unknown")
-    provider_call_id = str(attributes.get("sip.callID") or participant.identity)
+    provider_call_id = str(attributes.get("sip.callIDFull") or attributes.get("sip.callID") or participant.identity)
     adapter = build_adapter()
     if outbound is not None:
         if participant.identity != outbound.participant_identity:
@@ -186,14 +245,26 @@ async def production_agent(ctx: JobContext) -> None:
             to_e164=outbound.to_e164,
         )
     else:
+        caller, called_did, provider_call_id = inbound_sip_identity(
+            attributes, participant.identity
+        )
         call = await asyncio.to_thread(
             adapter.prepare_inbound,
-            organization_id=os.environ["OPENPHONEX_ORGANIZATION_ID"],
-            to_e164=os.environ["SCH236_TEST_DID_E164"],
+            to_e164=called_did,
             from_e164=caller,
             provider_call_id=provider_call_id,
         )
     profile = profile_from_realtime_config(call.config)
+    # Built before admit_media(): a misconfigured provider (e.g. a si-LK
+    # agent with no GCP credentials reachable) must fail BEFORE the caller
+    # hears anything, not answer-then-immediately-drop. build_demo_stack only
+    # constructs plugin objects / validates settings here -- it makes no
+    # provider network calls itself.
+    stack = build_demo_stack(
+        profile,
+        environ=os.environ,
+        load_vad=lambda **_kwargs: ctx.proc.userdata["vad"],
+    )
     call.admit_media()
     for publication in participant.track_publications.values():
         if publication.kind == rtc.TrackKind.KIND_AUDIO:
@@ -271,11 +342,6 @@ async def production_agent(ctx: JobContext) -> None:
 
     heartbeat_task = asyncio.create_task(heartbeat())
 
-    stack = build_demo_stack(
-        profile,
-        environ=os.environ,
-        load_vad=lambda **_kwargs: ctx.proc.userdata["vad"],
-    )
     tools = await asyncio.to_thread(build_livekit_model_tools, call)
     session = AgentSession(**stack.session_options)
     latency_recorder = TurnLatencyRecorder()
@@ -363,55 +429,107 @@ async def production_agent(ctx: JobContext) -> None:
     finally:
         ended_at = utcnow()
         heartbeat_task.cancel()
-        await asyncio.gather(heartbeat_task, return_exceptions=True)
-        await session.aclose()
-        await sidecar.disconnect()
-        if capture_tasks:
-            await asyncio.gather(*capture_tasks, return_exceptions=True)
-        summary = recorder.finalize()
-        latency_summary = latency_recorder.finalize(evidence_dir / "latency-stages.json")
-        await asyncio.to_thread(
-            call.report_lifecycle,
-            event_id=f"{call.call_id}:room-ended",
-            event_type="room.ended",
-            source_component="livekit_room",
-            observed_at=ended_at,
-        )
-        await asyncio.to_thread(
-            call.report_lifecycle,
-            event_id=f"{call.call_id}:sip-ended",
-            event_type="sip.ended",
-            source_component="livekit_sip",
-            observed_at=ended_at,
-        )
-        duration = wav_duration(evidence_dir / "mixed.wav")
-        imported = await asyncio.to_thread(
-            call.complete,
-            source_path=evidence_dir,
-            duration_sources={
-                "sip_participant": duration,
-                "room_track": duration,
-                "recording": duration,
-            },
-        )
-        call.cleanup(remove_participant=lambda: None, delete_room=lambda: None)
-        write_session_state(
-            state_path,
-            call_id=call.call_id,
-            room_name=ctx.room.name,
-            started_at=started_at,
-            last_heartbeat_at=ended_at,
-            status="complete",
-        )
-        emit(
-            "call_complete",
-            call_id=call.call_id,
-            semantic_turns=summary["semantic_turns"],
-            latency_turns=latency_summary["turn_count"],
-            artifact_status=str(imported.get("artifact_import", {}).get("status") or "imported"),
-            billing_source="gateway_sip_lifecycle",
-        )
-        await ctx.delete_room()
+        async def cleanup_room() -> None:
+            call.cleanup(remove_participant=lambda: None, delete_room=lambda: None)
+            await ctx.delete_room()
+
+        try:
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
+            await session.aclose()
+            await sidecar.disconnect()
+            if capture_tasks:
+                await asyncio.gather(*capture_tasks, return_exceptions=True)
+            summary: dict[str, object] | None = None
+            try:
+                summary = recorder.finalize()
+            except NoRoomAudioCaptured:
+                emit(
+                    "evidence_unavailable",
+                    call_id=call.call_id,
+                    semantic_evidence_status="unavailable_no_room_audio",
+                )
+            latency_summary = latency_recorder.finalize(
+                evidence_dir / "latency-stages.json"
+            )
+            await asyncio.to_thread(
+                call.report_lifecycle,
+                event_id=f"{call.call_id}:room-ended",
+                event_type="room.ended",
+                source_component="livekit_room",
+                observed_at=ended_at,
+            )
+            await asyncio.to_thread(
+                call.report_lifecycle,
+                event_id=f"{call.call_id}:sip-ended",
+                event_type="sip.ended",
+                source_component="livekit_sip",
+                observed_at=ended_at,
+            )
+        except BaseException:
+            await asyncio.shield(cleanup_room())
+            raise
+        try:
+            imported: dict[str, Any] = {}
+            artifact_status = "unavailable_no_room_audio"
+            if summary is not None:
+                duration = wav_duration(evidence_dir / "mixed.wav")
+                short_call = bool(summary["short_call_without_caller_speech"])
+                try:
+                    imported = await asyncio.to_thread(
+                        call.complete,
+                        source_path=evidence_dir,
+                        duration_sources={
+                            "sip_participant": duration,
+                            "room_track": duration,
+                            "recording": duration,
+                        },
+                        require_semantic_turns=not short_call,
+                    )
+                except Exception as exc:
+                    emit(
+                        "artifact_finalization_failed",
+                        call_id=call.call_id,
+                        semantic_evidence_status=summary["semantic_evidence_status"],
+                        caller_audio_observed=summary["caller_audio_observed"],
+                        short_call_without_caller_speech=short_call,
+                        error_type=type(exc).__name__,
+                    )
+                    raise
+                artifact_status = str(
+                    imported.get("artifact_import", {}).get("status") or "imported"
+                )
+            write_session_state(
+                state_path,
+                call_id=call.call_id,
+                room_name=ctx.room.name,
+                started_at=started_at,
+                last_heartbeat_at=ended_at,
+                status="complete",
+                artifact_status=artifact_status,
+            )
+            emit(
+                "call_complete",
+                call_id=call.call_id,
+                semantic_turns=summary["semantic_turns"] if summary else 0,
+                semantic_evidence_status=(
+                    summary["semantic_evidence_status"]
+                    if summary
+                    else "unavailable_no_room_audio"
+                ),
+                caller_audio_observed=(
+                    summary["caller_audio_observed"] if summary else False
+                ),
+                short_call_without_caller_speech=(
+                    summary["short_call_without_caller_speech"]
+                    if summary
+                    else True
+                ),
+                latency_turns=latency_summary["turn_count"],
+                artifact_status=artifact_status,
+                billing_source="gateway_sip_lifecycle",
+            )
+        finally:
+            await asyncio.shield(cleanup_room())
 
 
 if __name__ == "__main__":

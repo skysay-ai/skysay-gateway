@@ -42,7 +42,8 @@
     "language": {
       "enum": [
         "en",
-        "et"
+        "et",
+        "si"
       ]
     },
     "system_prompt": {

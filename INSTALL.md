@@ -102,6 +102,17 @@ not need it). Supply **all four** or **none**:
 | `OPENPHONEX_OUTBOUND_RINGING_TIMEOUT_SECONDS` | stop unanswered ringing after this many seconds (5–120) | your operating policy | `45` |
 | `OPENPHONEX_OUTBOUND_MAX_CALL_DURATION_SECONDS` | hard LiveKit SIP call cap (30–14400) | your operating policy | `1800` |
 
+**Optional — Sinhala (si-LK) voice stack** (only needed for an agent
+configured with `language: si`; neither Deepgram nor ElevenLabs supports
+Sinhala, so a `si` agent resolves to Google Chirp 2 → Gemini → Gemini-TTS
+instead). Set exactly **one** of the two GCP credential variables:
+
+| Variable | What it is | Where to get it | Example |
+|---|---|---|---|
+| `GOOGLE_APPLICATION_CREDENTIALS` | path to a GCP service-account JSON key file (Cloud Speech-to-Text v2, role `roles/speech.client`) — **not** the Gemini API key above | GCP Console → IAM & Admin → Service Accounts → Keys → Add key (JSON) | `/run/secrets/gcp-speech-sa.json` |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | the same service-account JSON, inlined as one env var instead of a file | same service account as above | `{"type":"service_account",...}` |
+| `GOOGLE_STT_LOCATION` | Cloud Speech-to-Text v2 recognizer region (optional; default `asia-southeast1`, empirically verified for si-LK Chirp 2 — Chirp 3 rejects si-LK with an HTTP 400 in both `eu` and `us`) | you | `asia-southeast1` |
+
 **Verify** (all required variables non-empty):
 
 ```bash

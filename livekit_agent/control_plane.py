@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Unigox OÜ
 """Portable OpenPhonex control-plane boundary for the LiveKit candidate.
 
-The media runtime may be LiveKit, Asterisk, or another SIP stack.  This module
+The media runtime is LiveKit SIP + LiveKit Agents.  This module
 keeps the contracts which must remain outside model-generated input: call
 authorization, resolved agent configuration, tool authorization, evidence
 import, billing-duration provenance, and idempotent media cleanup.
@@ -265,12 +265,11 @@ class Gate2CallSession:
         request_id = f"{self.call_id}:{self._tool_sequence}"
         result = self.tool_transport.request(
             "POST",
-            "/mcp",
+            f"/v1/calls/{self.call_id}/agent-tool-calls",
             {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": "tools/call",
-                "params": {"name": name, "arguments": arguments},
+                "tool_call_id": request_id,
+                "name": name,
+                "arguments": arguments,
             },
         )
         self.audit_events.append("tool_invoked_allowlisted")
@@ -349,7 +348,11 @@ class Gate2CallSession:
         return result
 
     def complete(
-        self, *, source_path: Path, duration_sources: dict[str, float]
+        self,
+        *,
+        source_path: Path,
+        duration_sources: dict[str, float],
+        require_semantic_turns: bool = True,
     ) -> dict[str, Any]:
         if not self.media_admitted or self._cleaned:
             raise SessionStateError("completion requires admitted media before cleanup")
@@ -357,7 +360,10 @@ class Gate2CallSession:
             raise SessionStateError("call completion is already finalized")
         if not self._lifecycle_finalized:
             raise SessionStateError("artifact upload requires finalized gateway lifecycle billing")
-        _validate_pr79_artifact_set(source_path)
+        _validate_pr79_artifact_set(
+            source_path,
+            require_semantic_turns=require_semantic_turns,
+        )
         normalized_duration = _duration_provenance(duration_sources)
         provenance = json.dumps(normalized_duration, sort_keys=True).encode()
         artifact_paths = [
@@ -413,6 +419,7 @@ class Gate2ControlPlaneAdapter:
         transport: JsonTransport,
         tool_transport: JsonTransport | None = None,
         call_transport: JsonTransport | None = None,
+        platform_transport: JsonTransport | None = None,
     ) -> None:
         if not gateway_id:
             raise ValueError("gateway_id is required")
@@ -424,13 +431,17 @@ class Gate2ControlPlaneAdapter:
         # Inbound routing is an organization call mutation and deliberately is
         # not granted to a narrow gateway token.
         self.call_transport = call_transport or transport
+        # The managed LiveKit fleet discovers the tenant from the called DID.
+        # A dedicated, narrowly scoped platform credential is required for that
+        # cross-tenant lookup and all subsequent call-bound actions.
+        self.platform_transport = platform_transport
 
     def report_failed_before_media(
         self, *, call_id: str, event_id: str, reason: str
     ) -> dict[str, Any]:
         """Close a reserved call which policy prevented from reaching media."""
 
-        result = self.transport.request(
+        result = (self.platform_transport or self.transport).request(
             "POST",
             f"/v1/gateway-deployments/{self.gateway_id}/call-lifecycle-events",
             {
@@ -551,7 +562,6 @@ class Gate2ControlPlaneAdapter:
     def prepare_inbound(
         self,
         *,
-        organization_id: str,
         to_e164: str,
         from_e164: str,
         provider_call_id: str,
@@ -562,11 +572,11 @@ class Gate2ControlPlaneAdapter:
         consume its audio until this route/policy call returns an allowed route.
         """
 
-        routed = self.call_transport.request(
+        platform_transport = self.platform_transport or self.call_transport
+        routed = platform_transport.request(
             "POST",
             "/v1/calls/inbound/route",
             {
-                "organization_id": organization_id,
                 "to_phone_number": to_e164,
                 "from_phone_number": from_e164,
                 "provider": "didww",
@@ -591,12 +601,21 @@ class Gate2ControlPlaneAdapter:
             or not agent_id
         ):
             raise ControlPlaneRejected("inbound route omitted the call or agent identity")
-        config = self.transport.request("GET", f"/v1/agents/{agent_id}/realtime-config")
-        _validate_realtime_config(config, expected_agent_id=agent_id)
+        organization_id = route.get("organization_id")
+        project_id = route.get("project_id")
+        if not isinstance(organization_id, str) or not organization_id or not isinstance(project_id, str) or not project_id:
+            raise ControlPlaneRejected("inbound route omitted the organization/project binding")
+        config = platform_transport.request("GET", f"/v1/calls/{call_id}/realtime-config")
+        _validate_realtime_config(
+            config,
+            expected_agent_id=agent_id,
+            expected_organization_id=organization_id,
+            expected_project_id=project_id,
+        )
         return Gate2CallSession(
-            transport=self.transport,
-            authorization_transport=self.transport,
-            tool_transport=self.tool_transport,
+            transport=platform_transport,
+            authorization_transport=platform_transport,
+            tool_transport=platform_transport,
             call_id=call_id,
             gateway_id=self.gateway_id,
             authorization_call_id="",
@@ -605,7 +624,13 @@ class Gate2ControlPlaneAdapter:
         )
 
 
-def _validate_realtime_config(config: dict[str, Any], *, expected_agent_id: str) -> None:
+def _validate_realtime_config(
+    config: dict[str, Any],
+    *,
+    expected_agent_id: str,
+    expected_organization_id: str | None = None,
+    expected_project_id: str | None = None,
+) -> None:
     required_strings = ("agent_id", "organization_id", "project_id", "language")
     missing = [
         name
@@ -616,6 +641,10 @@ def _validate_realtime_config(config: dict[str, Any], *, expected_agent_id: str)
         raise ControlPlaneRejected(f"realtime config omitted required fields: {', '.join(missing)}")
     if config["agent_id"] != expected_agent_id:
         raise ControlPlaneRejected("realtime config agent id does not match the requested agent")
+    if expected_organization_id is not None and config["organization_id"] != expected_organization_id:
+        raise ControlPlaneRejected("realtime config organization does not match the called number")
+    if expected_project_id is not None and config["project_id"] != expected_project_id:
+        raise ControlPlaneRejected("realtime config project does not match the called number")
     for component in ("transcriber", "model", "voice"):
         value = config.get(component)
         if (
@@ -633,7 +662,9 @@ def _validate_realtime_config(config: dict[str, Any], *, expected_agent_id: str)
         raise ControlPlaneRejected("Gate 2 requires caller-side recording to be enabled")
 
 
-def _validate_pr79_artifact_set(root: Path) -> None:
+def _validate_pr79_artifact_set(
+    root: Path, *, require_semantic_turns: bool = True
+) -> None:
     required = ("caller.wav", "agent.wav", "mixed.wav", "transcript.json")
     missing = [
         name
@@ -650,22 +681,44 @@ def _validate_pr79_artifact_set(root: Path) -> None:
         for path in root.glob("turn-*-agent.wav")
         if path.stat().st_size
     }
-    if caller_turns != agent_turns or not caller_turns:
+    if caller_turns != agent_turns or (require_semantic_turns and not caller_turns):
         missing.append("one-to-one turn-*-caller.wav and turn-*-agent.wav")
     transcript = root / "transcript.json"
     if transcript.is_file():
         try:
             value = json.loads(transcript.read_text())
-            if not isinstance(value, dict) or not isinstance(value.get("turns"), list) or not value["turns"]:
-                missing.append("transcript.json with at least one turn")
-            elif not valid_semantic_response_audio_policy(
-                value.get("semantic_response_audio_policy")
-            ):
-                missing.append("transcript.json with the PR #79 no-filler policy")
-            elif value.get("openphonex") and not valid_effective_voice_stack_identity(
-                value.get("effective_voice_stack")
-            ):
-                missing.append("transcript.json with a valid effective voice stack identity")
+            if not isinstance(value, dict) or not isinstance(value.get("turns"), list):
+                missing.append("transcript.json with a turns list")
+            else:
+                if require_semantic_turns and not value["turns"]:
+                    missing.append("transcript.json with at least one turn")
+                if len(value["turns"]) != len(caller_turns):
+                    missing.append("transcript turns with one-to-one caller/agent audio clips")
+                if value["turns"]:
+                    declared_caller = {
+                        str(turn.get("caller_audio"))
+                        for turn in value["turns"]
+                        if isinstance(turn, dict) and turn.get("caller_audio")
+                    }
+                    declared_agent = {
+                        str(turn.get("agent_audio"))
+                        for turn in value["turns"]
+                        if isinstance(turn, dict) and turn.get("agent_audio")
+                    }
+                    actual_caller = {f"{stem}-caller.wav" for stem in caller_turns}
+                    actual_agent = {f"{stem}-agent.wav" for stem in agent_turns}
+                    if (declared_caller and declared_caller != actual_caller) or (
+                        declared_agent and declared_agent != actual_agent
+                    ):
+                        missing.append("transcript audio filenames matching turn clips")
+                if not valid_semantic_response_audio_policy(
+                    value.get("semantic_response_audio_policy")
+                ):
+                    missing.append("transcript.json with the PR #79 no-filler policy")
+                if value.get("openphonex") and not valid_effective_voice_stack_identity(
+                    value.get("effective_voice_stack")
+                ):
+                    missing.append("transcript.json with a valid effective voice stack identity")
         except (OSError, ValueError):
             missing.append("valid transcript.json")
     for path in [root / name for name in required[:3]] + sorted(root.glob("turn-*.wav")):

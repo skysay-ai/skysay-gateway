@@ -293,9 +293,8 @@ paths:
         via `_complete_trial_inbound_call` (): creates an inbound
         call_session, emits `trial.pin_matched`, and either simulates media
         (`media_started`, demo artifacts) or - with `live_media=true` - enqueues a
-        `call.inbound_bridge` worker job gated by the live-call env gate
-        (`OPENPHONEX_LIVE_CALLS_ENABLED` + `OPENPHONEX_VOICE_LIVE_ENABLED`, plus
-        `REALTIME_LIVE_ENABLED` for the realtime pipeline). Returns the trial-call
+        `call.inbound_bridge` worker job gated by the LiveKit call gates
+        (`OPENPHONEX_LIVE_CALLS_ENABLED` + `OPENPHONEX_VOICE_LIVE_ENABLED`). Returns the trial-call
         resource with `call_id`/`call` attached and status `succeeded`.
       x-required-scopes: ["trial_calls:write"]
       x-json-schema:
@@ -864,7 +863,7 @@ components:
         agent_id: {type: string}
         organization_id: {type: string}
         project_id: {type: string}
-        language: {type: string, enum: [en, et]}
+        language: {type: string, enum: [en, et, si]}
         system_prompt: {type: string}
         first_message: {type: string}
         tools: {type: array, items: {type: string}}
@@ -1052,9 +1051,6 @@ components:
         provider_call_id: {type: string}
         country: {type: string}
         live_media: {type: boolean}
-        media_pipeline:
-          type: string
-          enum: [legacy, realtime]
       required: [pin]
 
     TrialCall:
@@ -1200,6 +1196,37 @@ components:
           type: array
           items: {type: object}
       required: [source_path, mode, imported_count, skipped_count, calls]
+
+    LiveCallMediaMetadata:
+      type: object
+      x-status: stable
+      description: |
+        AS-BUILT protocol object attached to live-call worker-job payloads as
+        `media_metadata`. Names MUST start with
+        OPENPHONEX_. Values are sanitized: stringified, truncated to 160 chars,
+        chars outside [A-Za-z0-9_.:@/-] replaced with '_'.
+      properties:
+        OPENPHONEX_CALL_DIRECTION:
+          type: string
+          enum: [inbound, outbound]
+          description: Always set by the control plane.
+        OPENPHONEX_ORGANIZATION_ID:
+          type: string
+          description: Always set by the control plane.
+        OPENPHONEX_CALL_ID: {type: string}
+        OPENPHONEX_PROJECT_ID: {type: string}
+        OPENPHONEX_NUMBER_ID: {type: string}
+        OPENPHONEX_AGENT_ID: {type: string}
+        OPENPHONEX_AGENT_ENDPOINT_ID: {type: string}
+        OPENPHONEX_PHONE_SERVER_ID: {type: string}
+        OPENPHONEX_TRIAL_CALL_ID: {type: string}
+        OPENPHONEX_MEDIA_PIPELINE:
+          type: string
+          enum: [livekit]
+      required: [OPENPHONEX_CALL_DIRECTION, OPENPHONEX_ORGANIZATION_ID]
+      additionalProperties:
+        type: string
+        description: Any additional OPENPHONEX_-prefixed variable passed by the enqueuer, post-sanitization.
 
     AudioContract:
       type: object

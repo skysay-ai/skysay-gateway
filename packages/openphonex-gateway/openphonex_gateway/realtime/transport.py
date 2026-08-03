@@ -265,8 +265,8 @@ class PacedRtpSender:
                     source_exhausted=source_exhausted,
                 )
             # Phase 2: refill to one frame, then send it paced at packet_ms.
-            # A trailing partial frame is dropped, matching the pre-prebuffer
-            # behavior of this sender.
+            # Preserve the source's final samples by padding a trailing partial
+            # frame with PCM silence instead of dropping the end of speech.
             while True:
                 if cancellation and cancellation.cancelled:
                     cancelled_by_token = True
@@ -281,7 +281,10 @@ class PacedRtpSender:
                         raise TypeError("RTP PCM chunks must be bytes")
                     buffered += chunk
                 if len(buffered) < frame_bytes:
-                    break
+                    if source_exhausted and buffered:
+                        buffered += b"\x00" * (frame_bytes - len(buffered))
+                    else:
+                        break
                 if cancellation and cancellation.cancelled:
                     cancelled_by_token = True
                     return packets
@@ -455,7 +458,7 @@ class UdpRtpTransport:
 
     @peer.setter
     def peer(self, peer: tuple[str, int] | None) -> None:
-        # ARI assigns the authoritative Asterisk RTP endpoint after transport
+        # The media controller assigns the authoritative remote RTP endpoint after transport
         # construction. The receive loop never calls this setter: an inbound
         # datagram must not be able to redirect outbound agent audio.
         resolved_hosts = _resolve_ipv4_hosts(peer[0]) if peer is not None else set()

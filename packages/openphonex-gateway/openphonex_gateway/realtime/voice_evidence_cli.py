@@ -27,10 +27,6 @@ from .voice_evidence import (
 
 
 COHORT_ENV_ALLOWLIST = (
-    "ASTERISK_ARI_APP",
-    "ASTERISK_ARI_URL",
-    "ASTERISK_EXTERNAL_MEDIA_HOST",
-    "ASTERISK_RTP_HOST",
     "VOICE_RTP_BIND",
     "VOICE_RTP_PORT",
     "VOICE_RTP_PORT_END",

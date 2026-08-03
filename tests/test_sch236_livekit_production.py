@@ -12,6 +12,7 @@ from livekit_agent.production import (
     build_livekit_model_tools,
     executed_tool_names,
     is_greeting_fragment,
+    post_livekit_worker_heartbeat,
     profile_from_realtime_config,
 )
 from livekit_agent.livekit_evidence import SynchronizedEvidenceRecorder
@@ -99,7 +100,34 @@ class _ToolsExecutedEvent:
         self.function_call_outputs = [object()]
 
 
+class _HeartbeatTransport:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict]] = []
+
+    def request(self, method: str, path: str, payload: dict) -> dict:
+        self.calls.append((method, path, payload))
+        return {"id": "whb_1", **payload}
+
+
 class SCH236LiveKitProductionTests(unittest.TestCase):
+    def test_livekit_process_posts_generic_worker_heartbeat_without_secrets(self) -> None:
+        transport = _HeartbeatTransport()
+        response = post_livekit_worker_heartbeat(
+            transport,
+            {
+                "OPENPHONEX_WORKER_ID": "livekit-prod",
+                "OPENPHONEX_WORKER_API_TOKEN": "must-not-leak",
+            },
+            process_id=42,
+        )
+
+        self.assertEqual(response["worker_id"], "livekit-prod-42")
+        self.assertEqual(transport.calls[0][0:2], ("POST", "/v1/worker-heartbeats"))
+        payload = transport.calls[0][2]
+        self.assertEqual(payload["worker_type"], "livekit_agent")
+        self.assertEqual(payload["metadata"]["media_stack"], "livekit")
+        self.assertNotIn("must-not-leak", json.dumps(payload))
+
     def test_latency_breakdown_separates_stt_endpoint_and_carrier_residual(self) -> None:
         breakdown = latency_breakdown(
             {"transcription_delay": 0.18, "end_of_turn_delay": 0.43},
@@ -219,6 +247,45 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
             self.assertEqual(transcript["turns"][0]["user"], "Palun kontrolli minu kõnesid.")
             self.assertEqual(transcript["turns"][0]["agent_audio"], "turn-001-agent.wav")
 
+    def test_room_sidecar_preserves_short_call_without_a_semantic_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = SynchronizedEvidenceRecorder(root, epoch=100.0)
+            recorder.append_pcm("agent", b"\x10\x27" * 4_000, received_at=100.5)
+            recorder.mark_state("agent", "listening", "speaking", at=100.0)
+            recorder.mark_state("agent", "speaking", "listening", at=100.5)
+
+            summary = recorder.finalize(ended_at=100.6)
+
+            self.assertEqual(summary["semantic_turns"], 0)
+            self.assertEqual(summary["semantic_evidence_status"], "unavailable_no_linked_turn")
+            self.assertTrue(summary["short_call_without_caller_speech"])
+            transcript = json.loads((root / "transcript.json").read_text())
+            self.assertEqual(transcript["summary"]["turn_count"], 0)
+            self.assertEqual(transcript["turns"], [])
+            for name in ("caller.wav", "agent.wav", "mixed.wav", "transcript.json"):
+                self.assertTrue((root / name).is_file())
+
+    def test_line_noise_without_vad_or_transcript_is_still_a_short_call(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SynchronizedEvidenceRecorder(Path(directory), epoch=100.0)
+            recorder.append_pcm("caller", b"\x20\x4e" * 3_200, received_at=100.4)
+
+            summary = recorder.finalize(ended_at=100.5)
+
+            self.assertEqual(summary["semantic_turns"], 0)
+            self.assertTrue(summary["caller_audio_observed"])
+            self.assertTrue(summary["short_call_without_caller_speech"])
+
+    def test_no_room_audio_finalize_remains_retryable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = SynchronizedEvidenceRecorder(Path(directory), epoch=100.0)
+
+            with self.assertRaisesRegex(RuntimeError, "no room audio"):
+                recorder.finalize(ended_at=100.1)
+            with self.assertRaisesRegex(RuntimeError, "no room audio"):
+                recorder.finalize(ended_at=100.2)
+
     def test_livekit_and_pr79_referee_share_the_exact_audio_policy(self) -> None:
         self.assertEqual(
             livekit_semantic_response_audio_policy(),
@@ -251,6 +318,51 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         bad["voice"]["registry_name"] = "unknown"
         with self.assertRaisesRegex(ProductionConfigurationError, "ElevenLabs"):
             profile_from_realtime_config(bad)
+
+    def test_sinhala_realtime_config_requires_google_stt_and_gemini_tts(self) -> None:
+        config = {
+            "agent_id": "agent_1",
+            "organization_id": "org_1",
+            "project_id": "project_1",
+            "language": "si",
+            "system_prompt": "Answer in Sinhala about the caller's loan payment.",
+            "first_message": "Ayubowan!",
+            "tools": [],
+            "recording_enabled": True,
+            "transcriber": {"registry_name": "google", "model": "chirp_2", "language": "si"},
+            "model": {"registry_name": "gemini", "model": "gemini-2.5-flash-lite"},
+            "voice": {
+                "registry_name": "gemini_tts",
+                "model": "gemini-2.5-flash-preview-tts",
+                "voice_id": "Kore",
+                "language": "si",
+            },
+        }
+
+        profile = profile_from_realtime_config(config)
+
+        self.assertEqual(profile.language, "si")
+        self.assertEqual(profile.stt_language, "si-LK")
+        self.assertEqual(profile.stt_registry, "google")
+        self.assertEqual(profile.tts_registry, "gemini_tts")
+        self.assertEqual(profile.voice_id, "Kore")
+
+        # Deepgram cannot serve si-LK STT at all.
+        deepgram_stt = dict(config)
+        deepgram_stt["transcriber"] = {"registry_name": "deepgram", "model": "nova-3", "language": "si"}
+        with self.assertRaisesRegex(ProductionConfigurationError, "Sinhala"):
+            profile_from_realtime_config(deepgram_stt)
+
+        # ElevenLabs cannot serve si-LK TTS at all.
+        elevenlabs_tts = dict(config)
+        elevenlabs_tts["voice"] = {
+            "registry_name": "elevenlabs",
+            "model": "eleven_v3",
+            "voice_id": "voice_1",
+            "language": "si",
+        }
+        with self.assertRaisesRegex(ProductionConfigurationError, "Sinhala"):
+            profile_from_realtime_config(elevenlabs_tts)
 
     # Source-inspection guard over a private control-plane seed script that is
     # deliberately not part of the OSS export; skips in the public repo.

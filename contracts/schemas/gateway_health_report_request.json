@@ -3,7 +3,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "gateway_health_report_request.json",
   "title": "POST /v1/gateway-deployments/{id}/health-report request body (as-built)",
-  "description": "Every field is optional; the report is stored verbatim (plus derived 'version' and 'checks') into last_health_status. Named checks may arrive either as top-level keys, as a 'checks' object keyed by name, or as a 'checks' array of {name,...} items. Recognized check names: api_health, media_health, voice_gateway_health, realtime_worker_health, storage.",
+  "description": "Derived from record_gateway_health_report and _named_checks. Every field is optional; the report is stored verbatim (plus derived version and checks) into last_health_status. Named checks may arrive either as top-level keys, as a checks object keyed by name, or as a checks array of named items. Recognized check names: api_health, media_health, voice_gateway_health, realtime_worker_health, storage.",
   "type": "object",
   "properties": {
     "checks": {

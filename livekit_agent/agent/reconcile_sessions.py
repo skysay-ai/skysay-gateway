@@ -26,7 +26,7 @@ async def reconcile_once() -> dict[str, list[str]]:
     client = api.LiveKitAPI()
     transport = UrllibJsonTransport(
         base_url=os.environ["OPENPHONEX_CONTROL_PLANE_URL"],
-        bearer_token=os.environ["OPENPHONEX_GATEWAY_API_TOKEN"],
+        bearer_token=os.environ["OPENPHONEX_PLATFORM_MEDIA_TOKEN"],
     )
     try:
         rooms = await client.room.list_rooms(api.ListRoomsRequest())

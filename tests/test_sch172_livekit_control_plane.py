@@ -13,6 +13,7 @@ from livekit_agent.control_plane import (
     SessionStateError,
     UrllibJsonTransport,
     _SameOriginRedirectHandler,
+    _validate_pr79_artifact_set,
     parse_outbound_dispatch,
 )
 from livekit_agent.evidence_contract import semantic_response_audio_policy
@@ -165,6 +166,29 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
             ],
         )
 
+    def test_managed_pre_media_failure_uses_platform_transport(self) -> None:
+        gateway_transport = FakeTransport([])
+        platform_transport = FakeTransport(
+            [{"canonical_type": "call.failed", "billing": {"status": "no_reservation"}}]
+        )
+        adapter = Gate2ControlPlaneAdapter(
+            gateway_id="gateway_shared",
+            transport=gateway_transport,
+            platform_transport=platform_transport,
+        )
+
+        adapter.report_failed_before_media(
+            call_id="call_customer",
+            event_id="call_customer:failed",
+            reason="worker_failed",
+        )
+
+        self.assertEqual(gateway_transport.calls, [])
+        self.assertEqual(
+            platform_transport.calls[0][1],
+            "/v1/gateway-deployments/gateway_shared/call-lifecycle-events",
+        )
+
     def test_authorized_outbound_resume_fetches_call_bound_config(self) -> None:
         config = {**_config(), "call_id": "call_1", "direction": "outbound"}
         transport = FakeTransport([config])
@@ -192,13 +216,17 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
                 {
                     "id": "call_in_1",
                     "status": "queued",
-                    "route": {"routed": True, "agent_id": "agent_1"},
+                    "route": {
+                        "routed": True,
+                        "agent_id": "agent_1",
+                        "organization_id": "org_1",
+                        "project_id": "project_1",
+                    },
                 },
                 _config(),
             ]
         )
         session = self._adapter(transport).prepare_inbound(
-            organization_id="org_1",
             to_e164="+15551230001",
             from_e164="+15557654321",
             provider_call_id="didww-call-1",
@@ -209,13 +237,13 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
             [(method, path) for method, path, _ in transport.calls],
             [
                 ("POST", "/v1/calls/inbound/route"),
-                ("GET", "/v1/agents/agent_1/realtime-config"),
+                ("GET", "/v1/calls/call_in_1/realtime-config"),
             ],
         )
         session.admit_media()
         self.assertTrue(session.media_admitted)
         self.assertEqual(len(transport.calls), 2)
-        self.assertEqual(transport.calls[0][2]["organization_id"], "org_1")
+        self.assertNotIn("organization_id", transport.calls[0][2])
 
     def test_tool_allowlist_blocks_model_input_before_mcp(self) -> None:
         transport = FakeTransport(
@@ -227,7 +255,7 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
                     {"name": "get_coverage", "inputSchema": {"type": "object"}},
                     {"name": "send_sms", "inputSchema": {"type": "object"}},
                 ]}},
-                {"jsonrpc": "2.0", "id": "call_1:1", "result": {"content": [{"json": {"coverage": []}}]}},
+                {"result": {"coverage": []}},
             ]
         )
         session = self._adapter(transport).prepare_outbound(
@@ -239,8 +267,34 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         self.assertIn("result", result)
         with self.assertRaises(ControlPlaneRejected):
             session.invoke_tool("send_sms", {"to": "+15551230001", "body": "no"})
-        self.assertEqual([call[1] for call in transport.calls].count("/mcp"), 2)
+        self.assertEqual([call[1] for call in transport.calls].count("/mcp"), 1)
+        self.assertIn("/v1/calls/call_1/agent-tool-calls", [call[1] for call in transport.calls])
         self.assertIn("/v1/gateway-call-authorizations/consume", [call[1] for call in transport.calls])
+
+    def test_inbound_rejects_realtime_config_from_a_different_tenant(self) -> None:
+        wrong = _config()
+        wrong["organization_id"] = "org_other"
+        transport = FakeTransport(
+            [
+                {
+                    "id": "call_in_wrong",
+                    "status": "queued",
+                    "route": {
+                        "routed": True,
+                        "agent_id": "agent_1",
+                        "organization_id": "org_1",
+                        "project_id": "project_1",
+                    },
+                },
+                wrong,
+            ]
+        )
+        with self.assertRaisesRegex(ControlPlaneRejected, "organization"):
+            self._adapter(transport).prepare_inbound(
+                to_e164="+15551230001",
+                from_e164="+15557654321",
+                provider_call_id="didww-call-wrong-org",
+            )
 
     def test_completion_requires_pr79_artifacts_and_duration_provenance(self) -> None:
         transport = FakeTransport(
@@ -306,6 +360,117 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         self.assertNotIn("duration_seconds", artifact_payload)
         self.assertIn("duration-provenance.json", {part["filename"] for part in artifact_payload["parts"]})
         self.assertEqual(session.audit_events[-1], "artifacts_imported")
+
+    def test_short_call_completion_explicitly_allows_base_recording_without_turn_clips(self) -> None:
+        transport = FakeTransport(
+            [
+                {"authorized": True, "call_id": "call_1", "token": "tca_once", "decision": {"decision": "allowed"}},
+                _config(),
+                {"call_id": "call_1", "status": "consumed"},
+                {
+                    "canonical_type": "call.ended",
+                    "duplicate": False,
+                    "billing": {"status": "settled"},
+                },
+                {"imported_count": 1, "skipped_count": 0},
+            ]
+        )
+        session = self._adapter(transport).prepare_outbound(
+            call_id="call_1",
+            agent_id="agent_1",
+            from_number_id="number_1",
+            to_e164="+15551230001",
+            metadata={},
+        )
+        session.admit_media()
+        session.report_lifecycle(
+            event_id="sip-end-1",
+            event_type="sip.ended",
+            source_component="livekit_sip",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("caller.wav", "agent.wav", "mixed.wav"):
+                _write_wav(root / name)
+            (root / "transcript.json").write_text(
+                json.dumps(
+                    {
+                        "turns": [],
+                        "semantic_response_audio_policy": semantic_response_audio_policy(),
+                        "summary": {"turn_count": 0},
+                    }
+                )
+            )
+
+            result = session.complete(
+                source_path=root,
+                duration_sources={"sip_participant": 1.0, "recording": 1.0},
+                require_semantic_turns=False,
+            )
+
+        self.assertEqual(result["billing_duration_seconds"], 1.0)
+        uploaded_names = {part["filename"] for part in transport.calls[-1][2]["parts"]}
+        self.assertEqual(
+            uploaded_names,
+            {"caller.wav", "agent.wav", "mixed.wav", "transcript.json", "duration-provenance.json"},
+        )
+
+    def test_strict_completion_rejects_base_recording_without_semantic_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("caller.wav", "agent.wav", "mixed.wav"):
+                _write_wav(root / name)
+            (root / "transcript.json").write_text(
+                json.dumps(
+                    {
+                        "turns": [],
+                        "semantic_response_audio_policy": semantic_response_audio_policy(),
+                    }
+                )
+            )
+
+            with self.assertRaises(IncompleteArtifactEvidence):
+                _validate_pr79_artifact_set(root)
+
+    def test_relaxed_completion_rejects_transcript_turn_without_audio_clips(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("caller.wav", "agent.wav", "mixed.wav"):
+                _write_wav(root / name)
+            (root / "transcript.json").write_text(
+                json.dumps(
+                    {
+                        "turns": [{"user": "Hello", "assistant": "Hi"}],
+                        "semantic_response_audio_policy": semantic_response_audio_policy(),
+                    }
+                )
+            )
+
+            with self.assertRaises(IncompleteArtifactEvidence):
+                _validate_pr79_artifact_set(root, require_semantic_turns=False)
+
+    def test_relaxed_completion_rejects_audio_clips_without_transcript_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                "caller.wav",
+                "agent.wav",
+                "mixed.wav",
+                "turn-001-caller.wav",
+                "turn-001-agent.wav",
+            ):
+                _write_wav(root / name)
+            (root / "transcript.json").write_text(
+                json.dumps(
+                    {
+                        "turns": [],
+                        "semantic_response_audio_policy": semantic_response_audio_policy(),
+                    }
+                )
+            )
+
+            with self.assertRaises(IncompleteArtifactEvidence):
+                _validate_pr79_artifact_set(root, require_semantic_turns=False)
 
     def test_cleanup_is_idempotent_and_attempts_participant_then_room(self) -> None:
         transport = FakeTransport(

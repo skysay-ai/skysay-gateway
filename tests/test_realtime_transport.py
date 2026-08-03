@@ -26,6 +26,23 @@ class _FakeClock:
 
 
 class RealtimeTransportTests(unittest.TestCase):
+    def test_rtp_sender_zero_pads_and_sends_trailing_partial_frame(self) -> None:
+        packets: list[bytes] = []
+        state = RtpSendState(sequence=50, timestamp=1000, ssrc=7)
+        partial_pcm = b"\x01\x00" * 80  # 10 ms at 8 kHz; RTP frames are 20 ms.
+
+        sent = PacedRtpSender(
+            packets.append,
+            state=state,
+            clock_sleep=lambda _seconds: None,
+        ).send_pcm16_stream([partial_pcm])
+
+        self.assertEqual(sent, 1)
+        self.assertEqual(len(packets), 1)
+        self.assertEqual(len(decode_rtp_ulaw_payload(packets[0])), 320)
+        self.assertEqual(state.sequence, 51)
+        self.assertEqual(state.timestamp, 1160)
+
     def test_rtp_receiver_start_failure_releases_bound_udp_port(self) -> None:
         probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         probe.bind(("127.0.0.1", 0))
@@ -235,7 +252,7 @@ class RealtimeTransportTests(unittest.TestCase):
             valid_sender.close()
             transport.close()
 
-    def test_rtp_receiver_can_require_ari_authoritative_peer_before_accepting_media(self) -> None:
+    def test_rtp_receiver_can_require_authoritative_peer_before_accepting_media(self) -> None:
         packets: list[bytes] = []
         PacedRtpSender(packets.append, clock_sleep=lambda _seconds: None).send_pcm16_stream(
             [AudioFrame.tone(20).pcm16]

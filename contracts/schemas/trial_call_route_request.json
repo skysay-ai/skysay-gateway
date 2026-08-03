@@ -33,18 +33,10 @@
     },
     "live_media": {
       "type": "boolean",
-      "description": "Alias: live. Live media is gated by OPENPHONEX_LIVE_CALLS_ENABLED / OPENPHONEX_VOICE_LIVE_ENABLED (+ REALTIME_LIVE_ENABLED for realtime)."
+      "description": "Alias: live. LiveKit media is gated by OPENPHONEX_LIVE_CALLS_ENABLED and OPENPHONEX_VOICE_LIVE_ENABLED."
     },
     "live": {
       "type": "boolean"
-    },
-    "media_pipeline": {
-      "type": "string",
-      "enum": [
-        "legacy",
-        "realtime"
-      ],
-      "description": "Aliases accepted by _requested_media_pipeline; realtime_media/low_latency_realtime booleans also force realtime."
     }
   },
   "required": [

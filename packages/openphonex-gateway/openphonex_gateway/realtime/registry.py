@@ -8,13 +8,8 @@ dotted-path loader, an entry-point loader and an alias table. It deliberately
 imports nothing heavy and nothing from the wider ``telephony_ai`` control
 plane, so importing it keeps the ``openphonex_gateway`` import-light guarantee.
 
-The BUILT-IN provider specs (deepgram/fake, gemini/template, elevenlabs/tone)
-are NOT registered here. They are registered from ``worker.py`` via a default
-registry whose factory closures resolve the built-in adapter classes through
-the worker module globals at call time, so that
-``mock.patch("telephony_ai.media.realtime.worker.DeepgramStreamingSTT", ...)``
-still swaps the constructed class. Registering built-ins here with direct
-imports would break those patches — do not do it.
+Runtime-specific provider bindings are owned by the LiveKit worker. This
+module remains a lightweight plugin contract for reusable adapters.
 
 A ``ProviderSpec`` is the stable, third-party-facing plugin contract. A pip
 installed package can advertise one three ways:

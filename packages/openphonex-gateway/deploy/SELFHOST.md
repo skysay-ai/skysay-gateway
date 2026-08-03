@@ -40,7 +40,8 @@ export test):
 | `livekit/sip` | `v1.7.0` (digest-pinned) |
 | `redis` | `8.8.0-alpine` (digest-pinned) |
 | `livekit-agents` + Deepgram/Google/ElevenLabs/Silero/turn-detector plugins | `1.6.6` (pip-pinned in `livekit_agent/agent/requirements.txt`) |
-| Voice pipeline | Deepgram nova-3 → Gemini → ElevenLabs (resolved per call from realtime-config) |
+| Voice pipeline (default) | Deepgram nova-3 → Gemini → ElevenLabs (resolved per call from realtime-config) |
+| Voice pipeline (si-LK / Sinhala) | Google Chirp 2 → Gemini → Gemini-TTS — see [Language stacks: Sinhala (si-LK)](#language-stacks-sinhala-si-lk) below |
 
 ## 0. What you need first
 
@@ -51,6 +52,7 @@ export test):
 | 3 | An **OpenPhonex control plane** you can reach | OpenPhonex Cloud (`https://api.openphonex.com`) or your own deployment |
 | 4 | From that control plane: an **organization id**, a **gateway deployment id + `tgw_` token**, a **worker API token**, and an **agent + phone-number route** configured for your DID | dashboard, or `POST /v1/gateway-deployments` → `POST /v1/gateway-deployments/{id}/tokens` (token shown once) |
 | 5 | Provider keys: `DEEPGRAM_API_KEY`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY` | console.deepgram.com / aistudio.google.com / elevenlabs.io |
+| 5b | *(only for si-LK / Sinhala agents)* a GCP service account for Cloud Speech-to-Text v2 | see [Language stacks: Sinhala (si-LK)](#language-stacks-sinhala-si-lk) below |
 | 6 | Firewall: open `5060/udp` to the carrier's **signaling** ranges and `10000-10100/udp` to its **RTP / media** ranges (scope each range set separately) | your host/cloud firewall. LiveKit's own API and Redis bind loopback-only. `50000-50020/udp` is only needed if you later add WebRTC (browser) participants |
 
 ## 1. Configure (three files)
@@ -195,9 +197,10 @@ the control plane authorizes the call:
    authoritative agent and creates the call. Endpoint-routed calls resolve
    tools the same way.
 2. `GET /v1/agents/{agent_id}/realtime-config` (gateway token) — the resolved
-   semantic config: system prompt, first message, language, Deepgram/Gemini/
-   ElevenLabs models + voice, and the tool allowlist. The agent validates it
-   and only then subscribes to media.
+   semantic config: system prompt, first message, language, transcriber/model/
+   voice provider selection (Deepgram/Gemini/ElevenLabs by default, or Google
+   Chirp 2/Gemini/Gemini-TTS for `language: si`), and the tool allowlist. The
+   agent validates it and only then subscribes to media.
 3. Tools: the agent fetches schemas via MCP `tools/list` on `POST /mcp`,
    exposes **only** allowlisted tools to the model, and every invocation
    crosses the control plane again (`tools/call`) with an audit trail.
@@ -214,6 +217,126 @@ The contract surface is [`contracts/gateway-v1.yaml`](../../../contracts/gateway
 The `reconciler` service closes sessions whose agent died mid-call
 (`session.reconciled` lifecycle events), so a crash can never leave dangling
 billed minutes.
+
+## Language stacks: Sinhala (si-LK)
+
+The default pipeline (Deepgram nova-3 → Gemini → ElevenLabs) does not cover
+Sinhala — **neither Deepgram nor ElevenLabs supports si-LK at all**. An agent
+configured with `language: si` instead resolves to:
+
+| Component | Provider | Notes |
+|---|---|---|
+| STT (transcriber) | Google Cloud Speech-to-Text v2, **Chirp 2** | `asia-southeast1` recognizer location — empirically verified against the live API for si-LK. Chirp 3 rejects si-LK with an HTTP 400 in both `eu` and `us`; Chirp 2 in `asia-southeast1` transcribed a Sinhala test phrase correctly at 0.89 confidence, and `asia-southeast1` is also geographically closer to Sri Lanka than `eu` |
+| LLM (model) | Gemini | same model catalog as every other language — Gemini handles Sinhala natively, no separate credential |
+| TTS (voice) | **Gemini-TTS** (`livekit.plugins.google.beta.GeminiTTS`) | same `GEMINI_API_KEY` as the LLM above; non-streaming (chunked HTTP synthesis, not a realtime websocket) |
+
+The catalog rejects any other combination for `si` up front — picking
+Deepgram or ElevenLabs for a Sinhala agent fails validation at config-save
+time with a clear error, not silently at call time.
+
+### 1. GCP service account (Chirp 2 credentials)
+
+Chirp 2 is a Cloud Speech-to-Text **v2** API call authenticated with a real
+GCP service account — this is **not** the `GEMINI_API_KEY` above (that's a
+Gemini API key, a completely different Google product surface).
+
+1. In the [GCP Console](https://console.cloud.google.com), pick or create a
+   project, then enable **Cloud Speech-to-Text API**
+   (`speech.googleapis.com`).
+2. IAM & Admin → Service Accounts → **Create service account**. Grant it the
+   **Cloud Speech Client** role (`roles/speech.client`) — no broader role is
+   needed.
+3. Open the new service account → **Keys** → **Add key** → **Create new key**
+   → JSON. Download the file.
+4. Give the agent stack that key one of two ways:
+   - **File mount (default):** copy the JSON to the host, bind-mount it into
+     the `agents` container, and set `GOOGLE_APPLICATION_CREDENTIALS=<path
+     inside the container>` in `.env.livekit`.
+   - **Inline env var:** if your platform only supports secrets-as-env-vars,
+     set `GOOGLE_APPLICATION_CREDENTIALS_JSON=<the file's contents, as a
+     single-quoted single line>` instead — no file mount needed. The agent
+     tries this first if both are set.
+
+### 2. Env vars (new in `.env.livekit`)
+
+```
+GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-speech-sa.json   # OR:
+GOOGLE_APPLICATION_CREDENTIALS_JSON='{"type":"service_account",...}'
+GOOGLE_STT_LOCATION=asia-southeast1   # optional; asia-southeast1 is the default and the empirically verified si-LK region (Chirp 3 rejects si-LK with an HTTP 400 in eu/us)
+```
+
+`GEMINI_API_KEY` (already required by the default pipeline) covers both the
+Gemini LLM and Gemini-TTS — no extra key for TTS.
+
+### 3. Configure the agent
+
+Set the agent's `language` to `si` and its transcriber/voice to the si-LK
+stack (via the dashboard's agent config editor — the language picker and
+provider dropdowns are catalog-driven and simply show the new options once
+this deploy has the credentials above — or via the API/MCP `set_agent_voice_stack` /`create_agent` call):
+
+```json
+{
+  "language": "si",
+  "transcriber": {"provider": "google", "model": "chirp_2"},
+  "model": {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
+  "voice": {"provider": "gemini", "model": "gemini-2.5-flash-preview-tts", "voice_id": "Kore"}
+}
+```
+
+### 4. Turn-taking caveat
+
+The pinned turn-detector plugin (`livekit-plugins-turn-detector` /
+`inference.TurnDetector(version="v1-mini")`) does not have a calibrated model
+for Sinhala (its local model only covers ar/de/en/es/fr/hi/id/it/ja/ko/nl/
+pt/tr/zh — the same reason Estonian `et` calls already fall back to VAD-only
+today). The worker detects this automatically per-call and falls back to
+Silero VAD + provider end-of-utterance timing instead of running the
+turn-detector uncalibrated. **Tradeoff:** turn-taking on si-LK calls is
+slightly slower / less natural than on a turn-detector-supported language —
+the agent waits out a fixed silence window (350–1500 ms) rather than acting on
+a semantic end-of-turn signal. This is a deliberate, tested fallback (see
+`TURN_DETECTOR_SUPPORTED_LANGUAGES` in [`livekit_agent/demo.py`](../../../livekit_agent/demo.py)),
+not an oversight.
+
+### 5. Validating before a real customer call
+
+Do **not** place a live PSTN call to validate this — synthesize and transcribe
+a short recorded Sinhala sample offline first. Once you have a short si-LK WAV
+sample (a native speaker saying a few sentences), a founder-run validation
+looks like:
+
+**Empirically confirmed against the live Google Speech-to-Text v2 API:**
+`chirp_2` + `asia-southeast1` transcribes si-LK correctly (0.89 confidence on
+a Gemini-TTS-synthesized Sinhala test phrase); `chirp_3` rejects si-LK with an
+HTTP 400 in both `eu` and `us`. Use the `chirp_2`/`asia-southeast1` pairing
+below, not `chirp_3`.
+
+```python
+# validate_sinhala_stack.py — run with: python3 validate_sinhala_stack.py sample.wav
+import sys
+from livekit.plugins import google
+from livekit.plugins.google.beta import GeminiTTS
+
+stt = google.STT(model="chirp_2", languages="si-LK", location="asia-southeast1")   # picks up
+                                                                                     # GOOGLE_APPLICATION_CREDENTIALS
+tts = GeminiTTS(model="gemini-2.5-flash-preview-tts", voice_name="Kore")  # picks up GEMINI_API_KEY / GOOGLE_API_KEY
+
+# 1. STT: confirm a recorded si-LK sample transcribes to readable Sinhala text.
+#    (see livekit.plugins.google.STT.recognize / .stream for the exact call
+#    shape used by build_demo_stack() in livekit_agent/demo.py)
+#
+# 2. TTS: confirm a short Sinhala sentence synthesizes to audible, correct speech.
+#    tts.synthesize("ඔබට ණය ගෙවීමේ දිනය මතක් කිරීමට කතා කරමි.")
+```
+
+This is the same build-the-exact-pinned-plugin-objects-and-round-trip-a-short-
+phrase pattern this stack already uses for provider interop smokes; use the
+snippet above as a starting point once you have a recorded sample. **This
+repo's automated validation of Gemini-TTS Sinhala output is a
+plugin-source-code / vendor-documentation check only — nobody on this change
+has heard the actual audio.** Listen to the synthesized sample yourself before
+routing real customer calls to it.
 
 ## Updating
 

@@ -18,7 +18,7 @@
       "origin": "generate:CONTRIBUTING.md"
     },
     "INSTALL.md": {
-      "bytes": 10451,
+      "bytes": 11525,
       "origin": "generate:INSTALL.md"
     },
     "LICENSE": {
@@ -46,7 +46,7 @@
       "origin": "generate:TRADEMARK.md"
     },
     "contracts/gateway-v1.yaml": {
-      "bytes": 48950,
+      "bytes": 50092,
       "origin": "include:contracts/gateway-v1.yaml",
       "scrubbed": true,
       "spdx": "comment"
@@ -64,7 +64,7 @@
       "spdx": "json"
     },
     "contracts/schemas/call_realtime_config.json": {
-      "bytes": 1780,
+      "bytes": 1794,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
@@ -100,7 +100,7 @@
       "spdx": "json"
     },
     "contracts/schemas/gateway_health_report_request.json": {
-      "bytes": 2865,
+      "bytes": 2913,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
@@ -142,7 +142,7 @@
       "spdx": "json"
     },
     "contracts/schemas/trial_call_route_request.json": {
-      "bytes": 1619,
+      "bytes": 1332,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
@@ -183,7 +183,7 @@
       "spdx": "py"
     },
     "livekit_agent/agent/production_agent.py": {
-      "bytes": 14925,
+      "bytes": 19642,
       "origin": "include:livekit_agent/agent/production_agent.py",
       "spdx": "py"
     },
@@ -193,7 +193,7 @@
       "spdx": "py"
     },
     "livekit_agent/agent/reconcile_sessions.py": {
-      "bytes": 2754,
+      "bytes": 2757,
       "origin": "include:livekit_agent/agent/reconcile_sessions.py",
       "spdx": "py"
     },
@@ -203,12 +203,12 @@
       "spdx": "comment"
     },
     "livekit_agent/control_plane.py": {
-      "bytes": 29357,
+      "bytes": 32141,
       "origin": "include:livekit_agent/control_plane.py",
       "spdx": "py"
     },
     "livekit_agent/demo.py": {
-      "bytes": 10819,
+      "bytes": 16970,
       "origin": "include:livekit_agent/demo.py",
       "spdx": "py"
     },
@@ -223,7 +223,7 @@
       "spdx": "py"
     },
     "livekit_agent/livekit_evidence.py": {
-      "bytes": 9682,
+      "bytes": 10477,
       "origin": "include:livekit_agent/livekit_evidence.py",
       "spdx": "py"
     },
@@ -233,7 +233,7 @@
       "spdx": "py"
     },
     "livekit_agent/production.py": {
-      "bytes": 6624,
+      "bytes": 9928,
       "origin": "include:livekit_agent/production.py",
       "spdx": "py"
     },
@@ -243,7 +243,7 @@
       "spdx": "py"
     },
     "llms-full.txt": {
-      "bytes": 21240,
+      "bytes": 22314,
       "origin": "generate:concat",
       "sources": [
         "README.md",
@@ -269,7 +269,7 @@
       "spdx": "py"
     },
     "packages/openphonex-common/openphonex_common/config.py": {
-      "bytes": 3456,
+      "bytes": 1911,
       "origin": "include:packages/openphonex-common",
       "spdx": "py"
     },
@@ -291,11 +291,11 @@
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/.env.livekit.example": {
-      "bytes": 7985,
+      "bytes": 9843,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/SELFHOST.md": {
-      "bytes": 13560,
+      "bytes": 20517,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/docker-compose.livekit.yml": {
@@ -356,7 +356,7 @@
       "spdx": "py"
     },
     "packages/openphonex-gateway/openphonex_gateway/realtime/deepgram_streaming_stt.py": {
-      "bytes": 9886,
+      "bytes": 9891,
       "origin": "include:packages/openphonex-gateway",
       "spdx": "py"
     },
@@ -431,7 +431,7 @@
       "spdx": "py"
     },
     "packages/openphonex-gateway/openphonex_gateway/realtime/registry.py": {
-      "bytes": 11009,
+      "bytes": 10664,
       "origin": "include:packages/openphonex-gateway",
       "spdx": "py"
     },
@@ -461,7 +461,7 @@
       "spdx": "py"
     },
     "packages/openphonex-gateway/openphonex_gateway/realtime/transport.py": {
-      "bytes": 24947,
+      "bytes": 25161,
       "origin": "include:packages/openphonex-gateway",
       "spdx": "py"
     },
@@ -481,7 +481,7 @@
       "spdx": "py"
     },
     "packages/openphonex-gateway/openphonex_gateway/realtime/voice_evidence_cli.py": {
-      "bytes": 22255,
+      "bytes": 22146,
       "origin": "include:packages/openphonex-gateway",
       "spdx": "py"
     },
@@ -492,8 +492,7 @@
     },
     "packages/openphonex-gateway/pyproject.toml": {
       "bytes": 2068,
-      "origin": "include:packages/openphonex-gateway",
-      "rewritten": true
+      "origin": "include:packages/openphonex-gateway"
     },
     "tests/test_livekit_outbound_worker.py": {
       "bytes": 6973,
@@ -506,7 +505,7 @@
       "rewritten": true
     },
     "tests/test_realtime_transport.py": {
-      "bytes": 31584,
+      "bytes": 32260,
       "origin": "include:tests/test_realtime_transport.py",
       "rewritten": true
     },
@@ -516,12 +515,12 @@
       "rewritten": true
     },
     "tests/test_sch172_livekit_control_plane.py": {
-      "bytes": 20627,
+      "bytes": 26980,
       "origin": "include:tests/test_sch172_livekit_control_plane.py",
       "rewritten": true
     },
     "tests/test_sch236_livekit_production.py": {
-      "bytes": 13154,
+      "bytes": 18289,
       "origin": "include:tests/test_sch236_livekit_production.py",
       "rewritten": true
     },
@@ -532,5 +531,5 @@
     }
   },
   "public_repo_name": "openphonex-gateway",
-  "total_bytes": 835375
+  "total_bytes": 875393
 }

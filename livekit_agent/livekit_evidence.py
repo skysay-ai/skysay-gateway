@@ -33,6 +33,10 @@ class TranscriptItem:
     at: float
 
 
+class NoRoomAudioCaptured(RuntimeError):
+    """The room ended before either synchronized track received audio."""
+
+
 class SynchronizedEvidenceRecorder:
     """Collects two real-time PCM tracks on one monotonic timeline.
 
@@ -138,7 +142,8 @@ class SynchronizedEvidenceRecorder:
         self.root.mkdir(parents=True, exist_ok=True)
         maximum = max(len(value) for value in self._tracks.values())
         if maximum == 0:
-            raise RuntimeError("no room audio was captured")
+            self._finalized = False
+            raise NoRoomAudioCaptured("no room audio was captured")
         for value in self._tracks.values():
             value.extend(b"\x00" * (maximum - len(value)))
         caller = bytes(self._tracks["caller"])
@@ -196,8 +201,6 @@ class SynchronizedEvidenceRecorder:
                     "agent_audio": agent_name,
                 }
             )
-        if not turns:
-            raise RuntimeError("no semantic caller/agent turn could be linked")
         (self.root / "transcript.json").write_text(
             json.dumps(
                 {
@@ -244,9 +247,24 @@ class SynchronizedEvidenceRecorder:
         return struct.pack(f"<{len(left)}h", *mixed)
 
     def _summary(self) -> dict[str, object]:
+        semantic_turns = len(list(self.root.glob("turn-*-caller.wav")))
+        caller_audio_observed = any(self._tracks["caller"])
+        caller_speech_intervals = len(self._intervals["caller"])
+        caller_transcript_items = sum(
+            1 for item in self._texts if item.role == "caller"
+        )
         return {
             "root": str(self.root),
             "sample_rate": self.sample_rate,
-            "semantic_turns": len(list(self.root.glob("turn-*-caller.wav"))),
+            "semantic_turns": semantic_turns,
+            "semantic_evidence_status": (
+                "complete" if semantic_turns else "unavailable_no_linked_turn"
+            ),
+            "caller_audio_observed": caller_audio_observed,
+            "caller_speech_intervals": caller_speech_intervals,
+            "caller_transcript_items": caller_transcript_items,
+            "short_call_without_caller_speech": not (
+                caller_speech_intervals or caller_transcript_items
+            ),
             "tracks_synchronized": True,
         }

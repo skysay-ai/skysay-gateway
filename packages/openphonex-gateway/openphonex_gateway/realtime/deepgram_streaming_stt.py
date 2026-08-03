@@ -75,7 +75,7 @@ class DeepgramStreamingSTT(StreamingSTT):
     """Deepgram live WebSocket STT adapter.
 
     The adapter keeps the OpenPhonex pipeline provider-neutral: it only emits
-    TranscriptEvent objects and does not know about DIDWW, Asterisk, billing, or
+    TranscriptEvent objects and does not know about DIDWW, media routing, billing, or
     call routing.
     """
 
