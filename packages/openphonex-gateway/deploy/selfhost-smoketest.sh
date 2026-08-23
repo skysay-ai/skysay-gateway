@@ -203,10 +203,11 @@ else
   pass "SIP_REGISTRATION_* is confined to .env.registrar"
 fi
 
+# Variables the stack cannot start without, whatever the agent is configured to
+# say. Provider keys are deliberately NOT in this list -- see below.
 REQUIRED_VARS="LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET \
 OPENPHONEX_CONTROL_PLANE_URL OPENPHONEX_GATEWAY_ID OPENPHONEX_GATEWAY_API_TOKEN \
-OPENPHONEX_WORKER_API_TOKEN OPENPHONEX_ORGANIZATION_ID SCH236_TEST_DID_E164 \
-DEEPGRAM_API_KEY GEMINI_API_KEY ELEVENLABS_API_KEY"
+OPENPHONEX_WORKER_API_TOKEN OPENPHONEX_ORGANIZATION_ID SCH236_TEST_DID_E164"
 MISSING=""
 for v in $REQUIRED_VARS; do
   eval "val=\${$v:-}"
@@ -218,11 +219,128 @@ else
   fail "all required .env.livekit variables are set" "missing:$MISSING (each is documented in .env.livekit.example)"
 fi
 
-case "${SCH236_TEST_DID_E164:-}" in
-  +[0-9]*) pass "SCH236_TEST_DID_E164 is E.164 with leading + (${SCH236_TEST_DID_E164})" ;;
-  "") : ;;  # already reported missing above
-  *) fail "SCH236_TEST_DID_E164 is E.164 with leading +" "got '${SCH236_TEST_DID_E164}'; expected e.g. +15551230000" ;;
-esac
+# WHICH provider keys you need is decided by the voice stack your agent
+# publishes, and this script cannot see that stack. But it does not have to
+# guess either: the worker accepts a fixed, small set of providers, so what is
+# *structurally* required follows from that set.
+#
+#   LLM  -- only gemini/google, so GEMINI_API_KEY is always needed.
+#   STT  -- deepgram (DEEPGRAM_API_KEY) or google chirp_2
+#           (GOOGLE_APPLICATION_CREDENTIALS[_JSON]); at least one.
+#   TTS  -- elevenlabs (ELEVENLABS_API_KEY) or gemini_tts, which reuses the
+#           Gemini key. So ElevenLabs is genuinely optional.
+#
+# This check has been wrong in three different directions: demanding all three
+# failed a correct Deepgram+Gemini install, warning let an ElevenLabs-only
+# install report PASS with no STT and no LLM, and UNVERIFIED meant a documented
+# valid stack could never reach the PASS the runbook requires. Deriving it from
+# the provider set is the first version that is right for both.
+GEMINI_SET=0; [ -n "${GEMINI_API_KEY:-}" ] && GEMINI_SET=1
+STT_SET=0
+STT_PATH_UNCHECKED=0
+[ -n "${DEEPGRAM_API_KEY:-}" ] && STT_SET=1
+# A path is a CONTAINER path -- the key file is mounted read-only into the
+# agents service -- so this script, running on the host, cannot open it. Say
+# that rather than treating "non-empty" as "valid".
+if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
+  STT_SET=1
+  STT_PATH_UNCHECKED=1
+fi
+# The inline variant IS checkable here, and a malformed value is a deterministic
+# first-call failure worth catching now: the agent needs real service-account
+# fields, so an empty object or a truncated paste must not read as configured.
+if [ -n "${GOOGLE_APPLICATION_CREDENTIALS_JSON:-}" ]; then
+  if GOOGLE_APPLICATION_CREDENTIALS_JSON="$GOOGLE_APPLICATION_CREDENTIALS_JSON" python3 -c '
+import json, os, sys
+try:
+    doc = json.loads(os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
+except Exception:
+    sys.exit(1)
+if not isinstance(doc, dict):
+    sys.exit(1)
+missing = [k for k in ("type", "client_email", "private_key") if not doc.get(k)]
+sys.exit(2 if missing else 0)
+' 2>/dev/null; then
+    STT_SET=1
+  else
+    fail "GOOGLE_APPLICATION_CREDENTIALS_JSON is a service-account key" \
+      "it does not parse as JSON, or is missing type/client_email/private_key — re-paste the whole downloaded key on one line, single-quoted (it contains \")"
+  fi
+fi
+
+if [ "$GEMINI_SET" -eq 0 ]; then
+  fail "GEMINI_API_KEY is set" \
+    "every supported stack resolves its model to Gemini, and Gemini TTS reuses the same key"
+elif [ "$STT_SET" -eq 0 ]; then
+  fail "an STT credential is set" \
+    "set DEEPGRAM_API_KEY, or GOOGLE_APPLICATION_CREDENTIALS/_JSON for the Google chirp_2 path; no supported stack transcribes without one"
+else
+  # Deliberately the WEAKER claim, and it says so. This proves a runnable stack
+  # is *possible* with the keys present; it cannot prove your agent's published
+  # stack is covered, because that would mean reading the agent, and the
+  # self-host worker key is scoped to calls:read + calls:write on purpose.
+  #
+  # The two gaps this leaves, both surfacing on the first call rather than here:
+  # an agent publishing ElevenLabs TTS with no ELEVENLABS_API_KEY, and an agent
+  # publishing Deepgram STT when only the Google credentials are set.
+  MISSING_OPTIONAL=""
+  [ -n "${ELEVENLABS_API_KEY:-}" ] || MISSING_OPTIONAL="$MISSING_OPTIONAL ELEVENLABS_API_KEY"
+  [ -n "${DEEPGRAM_API_KEY:-}" ] || MISSING_OPTIONAL="$MISSING_OPTIONAL DEEPGRAM_API_KEY"
+  STT_CAVEAT=""
+  [ "$STT_PATH_UNCHECKED" -eq 1 ] && STT_CAVEAT=" GOOGLE_APPLICATION_CREDENTIALS names a path inside the agents container, so its contents are not checked here."
+  if [ -n "$MISSING_OPTIONAL" ]; then
+    pass "provider credentials can run a supported stack (not set:$MISSING_OPTIONAL — this check cannot read your agent, so it proves a stack is possible, not that the one you published is covered.${STT_CAVEAT})"
+  else
+    pass "provider credentials cover every supported provider.${STT_CAVEAT}"
+  fi
+fi
+
+# One or more comma-separated E.164 numbers: one trunk serves every DID you
+# point at this gateway, and re-running provisioning with a different single
+# number replaces the trunk rather than adding to it.
+DID_LIST_OK=1
+DID_COUNT=0
+if [ -n "${SCH236_TEST_DID_E164:-}" ]; then
+  OLD_IFS="$IFS"; IFS=,
+  for _did in ${SCH236_TEST_DID_E164}; do
+    # Trim only the ENDS. `tr -d '[:space:]'` also deleted internal spaces, so
+    # `+1 2193126551` passed here and was then refused by the provisioner, which
+    # trims surrounding whitespace and nothing else.
+    _did="${_did#"${_did%%[![:space:]]*}"}"
+    _did="${_did%"${_did##*[![:space:]]}"}"
+    [ -n "$_did" ] || continue
+    DID_COUNT=$((DID_COUNT + 1))
+    # `+[0-9]*` would accept `+1219x126551`: it checks one digit and then lets
+    # `*` match anything. Require the leading +, at least one digit after it,
+    # and NO non-digit anywhere -- the same set the provisioner accepts, so a
+    # config cannot provision successfully and then fail this gate.
+    case "$_did" in
+      +*) ;;
+      *) DID_LIST_OK=0; BAD_DID="$_did"; continue ;;
+    esac
+    # Mirror the provisioner's `[1-9][0-9]{6,14}` exactly: no non-digits, no
+    # leading zero, and 7-15 digits. Anything looser lets this gate report a DID
+    # as valid that provisioning will then refuse -- which is the same
+    # disagreement as a missing `+`, only quieter, because it only shows up at
+    # the boundaries.
+    _digits="${_did#+}"
+    case "$_digits" in
+      ""|*[!0-9]*|0*) DID_LIST_OK=0; BAD_DID="$_did"; continue ;;
+    esac
+    if [ "${#_digits}" -lt 7 ] || [ "${#_digits}" -gt 15 ]; then
+      DID_LIST_OK=0; BAD_DID="$_did"; continue
+    fi
+  done
+  IFS="$OLD_IFS"
+  if [ "$DID_COUNT" -eq 0 ]; then
+    fail "SCH236_TEST_DID_E164 lists at least one number" "got '${SCH236_TEST_DID_E164}'; expected e.g. +15551230000"
+  elif [ "$DID_LIST_OK" -eq 1 ]; then
+    pass "SCH236_TEST_DID_E164 lists ${DID_COUNT} E.164 number(s) with leading + (${SCH236_TEST_DID_E164})"
+  else
+    fail "every SCH236_TEST_DID_E164 entry is E.164 with leading +" \
+      "'${BAD_DID}' is not; expected e.g. +15551230000 or +15551230000,+3725551234"
+  fi
+fi
 
 # --- 4. control-plane URL shape (mirrors the runtime guard EXACTLY) -----------
 # The bearer tokens are sent to this URL in steps 9-10, so validate it with the

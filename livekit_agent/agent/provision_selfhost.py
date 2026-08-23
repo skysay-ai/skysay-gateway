@@ -173,12 +173,18 @@ class OutboundSettings:
 
 @dataclass(frozen=True)
 class SelfhostSettings:
-    did: str
+    dids: tuple[str, ...]
     inbound_addresses: tuple[str, ...]
     outbound: OutboundSettings | None
     # True when the registering SIP sidecar fronts livekit-sip. The trunk then
     # carries no address allowlist, because every INVITE arrives from this host.
     registration_mode: bool = False
+
+    @property
+    def did(self) -> str:
+        """Backward-compatible primary DID, mirroring OutboundSettings.from_user."""
+
+        return self.dids[0]
 
 
 def _required(name: str, environ: dict[str, str]) -> str:
@@ -277,11 +283,29 @@ def load_settings(environ: dict[str, str] | None = None) -> SelfhostSettings:
     # Refuse to provision over a plaintext remote LiveKit control connection.
     _validate_livekit_url(environ.get("LIVEKIT_URL", ""))
 
-    did = _required("SCH236_TEST_DID_E164", environ).removeprefix("+")
-    if _E164_DIGITS.fullmatch(did) is None:
+    # One trunk, one dispatch rule, every DID you point at this gateway. Running
+    # this again with a different single DID does NOT add it -- provisioning
+    # replaces the trunk and retires the old one -- so a second number has to
+    # arrive as part of the same list. Same comma-separated shape as
+    # DIDWW_OUTBOUND_FROM_USER, so there is one convention to learn, not two.
+    # The leading + is required on EVERY entry, not merely tolerated. The env
+    # example, SELFHOST.md and selfhost-smoketest.sh all state it, and the smoke
+    # test enforces it -- so accepting a bare `3726543617` here would provision a
+    # trunk successfully and then fail the mandatory smoke gate, which is the
+    # worst place to disagree with yourself. Surrounding whitespace is still
+    # forgiven; a missing + is not.
+    entries = [item.strip() for item in _required("SCH236_TEST_DID_E164", environ).split(",")]
+    entries = [item for item in entries if item]
+    if not entries or any(
+        not item.startswith("+") or _E164_DIGITS.fullmatch(item[1:]) is None for item in entries
+    ):
         raise ProvisionConfigError(
-            "SCH236_TEST_DID_E164 must be an E.164 number (leading + then digits), e.g. +15551230000"
+            "SCH236_TEST_DID_E164 must be one or more comma-separated E.164 numbers, "
+            "each WITH its leading + — e.g. +15551230000 or +15551230000,+3725551234"
         )
+    dids = tuple(item[1:] for item in entries)
+    if len(set(dids)) != len(dids):
+        raise ProvisionConfigError("SCH236_TEST_DID_E164 contains duplicate numbers")
 
     # With the registering sidecar in front, livekit-sip sees THIS host as the
     # source of every INVITE, never the carrier. An allowlist of carrier ranges
@@ -399,7 +423,7 @@ def load_settings(environ: dict[str, str] | None = None) -> SelfhostSettings:
                     f"(got {log_level!r})"
                 ) from exc
         return SelfhostSettings(
-            did=did,
+            dids=dids,
             inbound_addresses=(),
             outbound=_load_outbound(environ),
             registration_mode=True,
@@ -412,7 +436,7 @@ def load_settings(environ: dict[str, str] | None = None) -> SelfhostSettings:
     outbound = _load_outbound(environ)
 
     return SelfhostSettings(
-        did=did,
+        dids=dids,
         inbound_addresses=tuple(addresses),
         outbound=outbound,
     )
@@ -488,7 +512,7 @@ async def provision(*, api_module: Any | None = None, environ: dict[str, str] | 
             api_module.CreateSIPInboundTrunkRequest(
                 trunk=api_module.SIPInboundTrunkInfo(
                     name=INBOUND_TRUNK_NAME,
-                    numbers=[settings.did],
+                    numbers=list(settings.dids),
                     allowed_addresses=list(settings.inbound_addresses),
                     media=api_module.SIPMediaConfig(
                         only_listed_codecs=True,
@@ -526,7 +550,7 @@ async def provision(*, api_module: Any | None = None, environ: dict[str, str] | 
                 dispatch_rule=api_module.SIPDispatchRuleInfo(
                     name=RULE_NAME,
                     trunk_ids=[inbound_trunk.sip_trunk_id],
-                    numbers=[settings.did],
+                    numbers=list(settings.dids),
                     rule=api_module.SIPDispatchRule(
                         dispatch_rule_individual=api_module.SIPDispatchRuleIndividual(room_prefix=ROOM_PREFIX)
                     ),

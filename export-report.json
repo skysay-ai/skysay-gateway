@@ -18,7 +18,7 @@
       "origin": "generate:CONTRIBUTING.md"
     },
     "INSTALL.md": {
-      "bytes": 23350,
+      "bytes": 25801,
       "origin": "generate:INSTALL.md"
     },
     "LICENSE": {
@@ -188,7 +188,7 @@
       "spdx": "py"
     },
     "livekit_agent/agent/provision_selfhost.py": {
-      "bytes": 28877,
+      "bytes": 30276,
       "origin": "generate:provision_selfhost.py",
       "spdx": "py"
     },
@@ -258,7 +258,7 @@
       "spdx": "py"
     },
     "llms-full.txt": {
-      "bytes": 34773,
+      "bytes": 37224,
       "origin": "generate:concat",
       "sources": [
         "README.md",
@@ -306,7 +306,7 @@
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/.env.livekit.example": {
-      "bytes": 11144,
+      "bytes": 11529,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/.env.registrar.example": {
@@ -314,7 +314,7 @@
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/SELFHOST.md": {
-      "bytes": 46942,
+      "bytes": 47355,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/docker-compose.livekit.yml": {
@@ -343,7 +343,7 @@
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/selfhost-smoketest.sh": {
-      "bytes": 35140,
+      "bytes": 41133,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/sip.yaml.example": {
@@ -566,5 +566,5 @@
     }
   },
   "public_repo_name": "openphonex-gateway",
-  "total_bytes": 1218209
+  "total_bytes": 1231301
 }

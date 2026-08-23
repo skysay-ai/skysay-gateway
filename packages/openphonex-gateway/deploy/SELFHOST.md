@@ -477,8 +477,13 @@ returns a runtime configuration.
      control plane. The agent refuses to send bearer tokens over plaintext
      http to anything but verified loopback (`127.0.0.0/8`, `::1`,
      `localhost`), and refuses cross-origin redirects.
-   - `SCH236_TEST_DID_E164` takes the leading `+` (`+15551230000`) — it is the
-     one DID you set; provisioning reuses it.
+   - `SCH236_TEST_DID_E164` takes the leading `+` (`+15551230000`), and accepts
+     a comma-separated list (`+15551230000,+3725551234`) when this gateway
+     should answer more than one number. They share one inbound trunk and one
+     dispatch rule, and provisioning reuses the list. Note that re-running
+     provisioning with a *different* single number does not add it: the flow
+     creates a replacement trunk and retires the old one, so the second number
+     would silently take the first one's place. List them together instead.
    - `DIDWW_INBOUND_ADDRESSES` must be your carrier's **real public** signaling
      ranges. The example value is a documentation range and is rejected on
      purpose (so you can't provision an allowlist no real call matches).

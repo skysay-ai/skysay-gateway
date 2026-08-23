@@ -187,8 +187,44 @@ Background reading (optional):
 | 0.3 | A **DID** (phone number) on a SIP trunk that sends calls to your host, plus your carrier's **SIP signaling IP ranges** AND its **RTP / media IP ranges** (from the carrier portal — these are often DIFFERENT range sets) | e.g. DID `+15551230000`, signaling `203.0.113.0/24`, media `203.0.113.128/25` |
 | 0.4 | An **OpenPhonex control plane** URL | OpenPhonex Cloud: `https://api.openphonex.com`, or your own deployment |
 | 0.5 | From that control plane: **organization id**, registered **gateway deployment id**, two **different** credentials (`tgw_` gateway token and `tai_` worker key), and an **agent + phone-number route** configured for your DID | **API Keys → Gateway Tokens** creates the deployment-bound `tgw_`; the separate regular **API Keys** card creates the organization-scoped `tai_` worker key |
-| 0.6 | Provider API keys: **Deepgram**, **Gemini**, **ElevenLabs** | from console.deepgram.com / aistudio.google.com / elevenlabs.io |
+| 0.6 | Provider API keys for the components your agent's published voice stack actually resolves to — commonly **Deepgram** (STT) and **Gemini** (LLM), plus **ElevenLabs** only if your stack uses ElevenLabs TTS | from console.deepgram.com / aistudio.google.com / elevenlabs.io. An English agent on Gemini TTS needs no ElevenLabs key; Estonian requires one |
 | 0.7 | Host firewall able to open `5060/udp` (to the SIP **signaling** ranges) and `10000-10100/udp` (to the RTP **media** ranges) separately. In the registration topology you DROP inbound `5060/udp` instead and forward nothing — see step 4 | cloud-firewall or `ufw`/`nftables` access |
+
+### Getting 0.3–0.5, in order, as a new OpenPhonex customer
+
+Row 0.5 is one table cell describing several days of work. If you are starting
+from nothing, this is the sequence — and the order matters, because carrier
+registration is the one step you cannot hurry.
+
+1. **Create a workspace.** Sign up at `openphonex.com` and sign in with the
+   emailed code.
+2. **Create an agent.** Name, language, first message and system prompt, then
+   its STT / model / voice. **Publish it.** An unpublished or incomplete agent
+   cannot answer a call, and the workspace will tell you exactly what is
+   missing.
+3. **Get a number.** Pick the country and number type you want.
+   - If that combination needs **no carrier registration**, the number
+     activates and you can move on.
+   - If it **does**, you attach an end-user profile — a business or individual
+     identity, with address and supporting documents — and submit it. The
+     carrier reviews it. **This can take days, and the number cannot take calls
+     until it is approved.** Start it before you need it.
+4. **Route the number to the agent.** A number with no agent is a number that
+   rings nowhere.
+5. **Register this gateway.** Settings → Gateway → register a self-hosted
+   gateway. That gives you `OPENPHONEX_GATEWAY_ID`.
+6. **Mint the two credentials.** They are different things and are not
+   interchangeable:
+   - **API Keys → Gateway Tokens** → a `tgw_` token, bound to the one gateway
+     you just registered. This is `OPENPHONEX_GATEWAY_API_TOKEN`.
+   - the ordinary **API Keys** card → a `tai_` key carrying **`calls:read`** and
+     **`calls:write`**. This is `OPENPHONEX_WORKER_API_TOKEN`.
+
+   Both are shown **once**. Copy them straight into `.env.livekit`.
+7. **Copy your organization id** into `OPENPHONEX_ORGANIZATION_ID`.
+
+Steps 1, 2 and 5–7 are minutes. Step 3 is the one that can block you, so if you
+are reading this to plan a deployment, start the number first.
 
 ### Choosing your inbound topology
 
@@ -304,14 +340,16 @@ the control plane returns the inbound call's runtime configuration.
 | `OPENPHONEX_GATEWAY_API_TOKEN` | deployment-scoped `tgw_` token for its matching gateway's number-rules, lifecycle, and artifact operations | **API Keys → Gateway Tokens** after registering that gateway — revealed **once** as `OPENPHONEX_GATEWAY_API_TOKEN=tgw_...` | `tgw_...` |
 | `OPENPHONEX_WORKER_API_TOKEN` | organization-scoped `tai_` worker key (inbound routing, its call-bound runtime-config read, and MCP `tools/list` schema lookup; the self-host baseline is `calls:read` + `calls:write`) | separate regular **API Keys** card → **Create self-host worker key** — revealed **once** | `tai_...` |
 | `OPENPHONEX_ORGANIZATION_ID` | the org that owns your DID | dashboard → organization settings | `org_01HZX...` |
-| `SCH236_TEST_DID_E164` | the DID this agent answers, **with** `+` | your carrier + registered in OpenPhonex | `+15551230000` |
+| `SCH236_TEST_DID_E164` | the DID(s) this gateway answers, **with** `+`. Comma-separate for more than one — they share one trunk and one dispatch rule | your carrier + registered in OpenPhonex | `+15551230000` or `+15551230000,+3725551234` |
 | `DEEPGRAM_API_KEY` | STT provider key | console.deepgram.com → API Keys | `...` |
 | `GEMINI_API_KEY` | LLM provider key | aistudio.google.com → Get API key | `...` |
 | `ELEVENLABS_API_KEY` | TTS provider key | elevenlabs.io → Profile → API Keys | `...` |
 | `SCH236_NUM_IDLE_PROCESSES` | warm idle agent processes (optional) | default is fine | `2` |
 | `DIDWW_INBOUND_ADDRESSES` | carrier signaling CIDRs (inbound allowlist for provisioning). **Public** ranges only — the example below is a documentation range and is rejected on purpose | carrier portal → signaling IPs | `203.0.113.0/24,198.51.100.0/28` (replace with your real ranges) |
 
-The `provision` step uses `SCH236_TEST_DID_E164` (above) for the DID — you do
+The `provision` step uses `SCH236_TEST_DID_E164` (above) for every DID it lists
+— re-running it with a different single number replaces the trunk rather than
+adding to it, so put all your numbers in that one setting. You do
 NOT set the DID twice.
 
 **Optional — outbound trunk** (only to place calls OUT; inbound answering does
