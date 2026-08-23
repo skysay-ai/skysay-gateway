@@ -35,6 +35,10 @@ class _Adapter:
         self.events.append(("prepared", kwargs["call_id"], kwargs["to_e164"]))
         return _Session(self.events)
 
+    def report_failed_before_media(self, **_kwargs):
+        self.events.append("sip_failed_reported")
+        return {"canonical_type": "call.failed", "billing": {"status": "released"}}
+
 
 class _Sip:
     def __init__(self, events, fail=False):
@@ -64,6 +68,9 @@ class _Room:
 
     async def delete_room(self, request):
         self.events.append(("delete_room", request.room))
+
+    async def remove_participant(self, request):
+        self.events.append(("remove_participant", request.room, request.identity))
 
 
 class _Dispatch:
@@ -98,6 +105,7 @@ class _Api(types.SimpleNamespace):
             "SIPMediaConfig",
             "SIPCodec",
             "DeleteRoomRequest",
+            "RoomParticipantIdentity",
         ):
             setattr(self, name, _Message)
 
@@ -170,15 +178,195 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
         with patch.object(worker, "Gate2ControlPlaneAdapter", _Adapter), \
              patch.object(worker, "_transports", return_value=(object(), object())), \
              patch.object(worker, "_duration_limits", return_value={}):
-            with self.assertRaisesRegex(RuntimeError, "carrier unavailable"):
+            with self.assertRaisesRegex(
+                worker.OutboundPostAdmissionError,
+                "after media authorization",
+            ):
                 asyncio.run(worker.originate_job(_settings(), _job(), api_module=api))
 
         self.assertIn("sip_failed_reported", events)
         self.assertTrue(any(isinstance(item, tuple) and item[0] == "delete_room" for item in events))
+        self.assertTrue(any(isinstance(item, tuple) and item[0] == "remove_participant" for item in events))
+
+    def test_post_admission_failure_is_terminal_and_never_requests_a_redial(self):
+        class _Transport:
+            def __init__(self):
+                self.requests = []
+
+            def request(self, method, path, payload):
+                self.requests.append((method, path, payload))
+                return {"status": "failed"}
+
+        transport = _Transport()
+        outbound = worker.OutboundWorker(_settings())
+        outbound.worker_transport = transport
+        outbound.claim = lambda: _job()  # type: ignore[method-assign]
+
+        async def fail_after_admission(*_args, **_kwargs):
+            raise worker.OutboundPostAdmissionError("already attempted")
+
+        with patch.object(worker, "originate_job", fail_after_admission):
+            result = asyncio.run(outbound.run_once())
+
+        self.assertEqual(result["job_status"], "failed")
+        self.assertEqual(len(transport.requests), 1)
+        payload = transport.requests[0][2]
+        self.assertFalse(payload["retry"])
+        self.assertEqual(payload["max_attempts"], 1)
+
+    def test_payload_trunk_name_reaches_the_dial_through_originate_job(self):
+        # End-to-end over the merged call site: the payload trunk name must
+        # survive the staged pre-media path and be the trunk the SIP
+        # participant is actually created on - not the env default.
+        events = []
+        _Adapter.events = events
+
+        class _TwoTrunkSip(_Sip):
+            async def list_outbound_trunk(self, _request):
+                return _Message(items=[
+                    _Message(name=worker.OUTBOUND_TRUNK_NAME, sip_trunk_id="STO_DEFAULT", numbers=["15551230000"]),
+                    _Message(name="openphonex-didlogic-outbound", sip_trunk_id="STO_DIDLOGIC", numbers=["15551230000"]),
+                ])
+
+            async def create_sip_participant(self, request, timeout=None):
+                self.events.append(("dial_trunk", request.sip_trunk_id))
+                return await super().create_sip_participant(request, timeout=timeout)
+
+        api = _Api(events)
+        api.client.sip = _TwoTrunkSip(events)
+        with patch.object(worker, "Gate2ControlPlaneAdapter", _Adapter), \
+             patch.object(worker, "_transports", return_value=(object(), object())), \
+             patch.object(worker, "_duration_limits", return_value={}):
+            result = asyncio.run(worker.originate_job(
+                _settings(),
+                _job(outbound_trunk_name="openphonex-didlogic-outbound"),
+                api_module=api,
+            ))
+
+        self.assertEqual(result["call_status"], "answered")
+        self.assertIn(("dial_trunk", "STO_DIDLOGIC"), events)
+
+    def test_originate_job_falls_back_to_the_env_trunk_without_a_payload_name(self):
+        # Managed numbers send no trunk name; the env default must still win.
+        events = []
+        _Adapter.events = events
+
+        class _RecordingSip(_Sip):
+            async def create_sip_participant(self, request, timeout=None):
+                self.events.append(("dial_trunk", request.sip_trunk_id))
+                return await super().create_sip_participant(request, timeout=timeout)
+
+        api = _Api(events)
+        api.client.sip = _RecordingSip(events)
+        with patch.object(worker, "Gate2ControlPlaneAdapter", _Adapter), \
+             patch.object(worker, "_transports", return_value=(object(), object())), \
+             patch.object(worker, "_duration_limits", return_value={}):
+            asyncio.run(worker.originate_job(_settings(), _job(), api_module=api))
+
+        self.assertIn(("dial_trunk", "STO_1"), events)
+
+    def test_terminal_job_error_keeps_the_underlying_failure_class(self):
+        # A misconfigured per-number trunk is terminal, so the worker-job error
+        # must still say WHICH failure it was. Class names only - never the
+        # exception message, which can carry provider detail.
+        class _Transport:
+            def __init__(self):
+                self.requests = []
+
+            def request(self, method, path, payload):
+                self.requests.append((method, path, payload))
+                return {"status": "failed"}
+
+        transport = _Transport()
+        outbound = worker.OutboundWorker(_settings())
+        outbound.worker_transport = transport
+        outbound.claim = lambda: _job()  # type: ignore[method-assign]
+
+        async def fail_with_cause(*_args, **_kwargs):
+            try:
+                raise worker.OutboundWorkerError(
+                    "expected exactly one configured outbound trunk containing the requested caller ID"
+                )
+            except worker.OutboundWorkerError as exc:
+                raise worker.OutboundPostAdmissionError(
+                    "outbound execution ended after media authorization"
+                ) from exc
+
+        with patch.object(worker, "originate_job", fail_with_cause):
+            result = asyncio.run(outbound.run_once())
+
+        payload = transport.requests[0][2]
+        self.assertEqual(payload["error"], "OutboundPostAdmissionError:OutboundWorkerError")
+        self.assertNotIn("caller ID", payload["error"])
+        self.assertFalse(payload["retry"])
+        self.assertEqual(result["error_type"], "OutboundPostAdmissionError")
+
+    def test_unchained_job_error_reports_the_bare_class_name(self):
+        class _Transport:
+            def __init__(self):
+                self.requests = []
+
+            def request(self, method, path, payload):
+                self.requests.append((method, path, payload))
+                return {"status": "failed"}
+
+        transport = _Transport()
+        outbound = worker.OutboundWorker(_settings())
+        outbound.worker_transport = transport
+        outbound.claim = lambda: _job()  # type: ignore[method-assign]
+
+        async def fail_plain(*_args, **_kwargs):
+            raise worker.OutboundWorkerError("outbound job payload must be an object")
+
+        with patch.object(worker, "originate_job", fail_plain):
+            asyncio.run(outbound.run_once())
+
+        self.assertEqual(transport.requests[0][2]["error"], "OutboundWorkerError")
 
     def test_job_validation_rejects_disabled_live_gate(self):
         with self.assertRaisesRegex(worker.OutboundWorkerError, "live-call gate"):
             worker._validate_job(_settings(), _job(live_call_gate={"enabled": False}))
+
+    def test_job_trunk_name_overrides_env_default(self):
+        # The control plane threads the NUMBER's provider-account trunk name
+        # through the job payload; the worker must dial out of that trunk,
+        # not the env default.
+        events = []
+
+        class _TwoTrunkSip(_Sip):
+            async def list_outbound_trunk(self, _request):
+                return _Message(items=[
+                    _Message(name=worker.OUTBOUND_TRUNK_NAME, sip_trunk_id="STO_DEFAULT", numbers=["15551230000"]),
+                    _Message(name="openphonex-didlogic-outbound", sip_trunk_id="STO_DIDLOGIC", numbers=["15551230000"]),
+                ])
+
+        settings = _settings()
+        api = _Api(events)
+        api.client.sip = _TwoTrunkSip(events)
+        trunk = asyncio.run(worker._select_outbound_trunk(
+            api.client, api, settings, "+15551230000", trunk_name="openphonex-didlogic-outbound",
+        ))
+        self.assertEqual(trunk.sip_trunk_id, "STO_DIDLOGIC")
+        # Default stays the env-configured trunk when the job omits the name.
+        default_trunk = asyncio.run(worker._select_outbound_trunk(api.client, api, settings, "+15551230000"))
+        self.assertEqual(default_trunk.sip_trunk_id, "STO_DEFAULT")
+
+    def test_job_trunk_name_still_requires_caller_id_membership(self):
+        # A trunk name cannot smuggle a caller ID the trunk does not carry.
+        events = []
+
+        class _WrongNumberSip(_Sip):
+            async def list_outbound_trunk(self, _request):
+                return _Message(items=[
+                    _Message(name="openphonex-didlogic-outbound", sip_trunk_id="STO_DIDLOGIC", numbers=["94711111001"]),
+                ])
+
+        api = _Api(events)
+        api.client.sip = _WrongNumberSip(events)
+        with self.assertRaisesRegex(worker.OutboundWorkerError, "exactly one configured outbound trunk"):
+            asyncio.run(worker._select_outbound_trunk(
+                api.client, api, _settings(), "+15551230000", trunk_name="openphonex-didlogic-outbound",
+            ))
 
     def test_settings_keep_live_execution_off_by_default(self):
         environ = {

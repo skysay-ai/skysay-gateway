@@ -6,7 +6,7 @@
 
 - [Self-host install runbook](INSTALL.md): the linear, step-by-step self-host guide (prerequisites -> configure -> up -> provision -> smoke test -> test call); every env var documented with what/where-to-get-it/example. START HERE to install.
 - [Agent operating instructions](AGENTS.md): how an AI agent should execute the install and work in this repo.
-- [Self-host smoke test](packages/openphonex-gateway/deploy/selfhost-smoketest.sh): PASS/FAIL verification of the running stack (services, agent registration, both control-plane tokens); exit 0 = call-ready.
+- [Self-host smoke test](packages/openphonex-gateway/deploy/selfhost-smoketest.sh): PASS/FAIL verification of the running stack (services, agent registration, both control-plane tokens); exit 0 proves the safe prerequisites, while the first real call confirms the DID route.
 - [LiveKit production agent](livekit_agent/): the production media-plane agent (runtime modules byte-identical to what OpenPhonex production runs; minimal pinned Dockerfile); per-call config resolves from the control plane.
 - [Self-host quickstart + deploy files](packages/openphonex-gateway/deploy/SELFHOST.md): runbook, [docker-compose.livekit.yml](packages/openphonex-gateway/deploy/docker-compose.livekit.yml), config templates.
 - [openphonex-gateway package](packages/openphonex-gateway/): shared realtime pipeline / provider library (streaming STT-LLM-TTS primitives, semantic audio policy, call evidence) exercised by the exported tests.
@@ -17,21 +17,22 @@
 
 ## The LiveKit media plane (matches production)
 
-The self-host stack mirrors OpenPhonex production: livekit-server v1.13.4 + livekit-sip v1.7.0 + redis 8.8.0 (all digest-pinned) + the `agents` container running [livekit_agent/agent/production_agent.py](livekit_agent/agent/production_agent.py) (LiveKit Agents 1.6.6) + a session `reconciler`. The agent joins each inbound room unsubscribed and admits NO caller audio until the control plane authorizes the call: `POST /v1/calls/inbound/route` (worker token) resolves the DID to the authoritative agent, then `GET /v1/agents/{agent_id}/realtime-config` (gateway token) returns the validated semantic config (system prompt, first message, language, Deepgram nova-3 STT, Gemini LLM, ElevenLabs TTS + voice, tool allowlist). Tools come from MCP `tools/list` on `POST /mcp`, are exposed to the model ONLY if allowlisted, and every invocation re-crosses the control plane (`tools/call`) with an audit trail. Lifecycle events post to `POST /v1/gateway-deployments/{id}/call-lifecycle-events` and produce the authoritative billing verdict; artifacts upload to `POST /v1/calls/{call_id}/artifacts`. The reconciler closes sessions whose agent died so dangling billed minutes are impossible.
+The self-host stack tracks OpenPhonex production closely but is not identical to it: livekit-server v1.13.5 + livekit-sip v1.7.0 match the production voice box tag-and-digest as of 2026-08-11, while redis 8.8.0 does not (production is on 7.4.5-alpine); all three are digest-pinned + the `agents` container running [livekit_agent/agent/production_agent.py](livekit_agent/agent/production_agent.py) (LiveKit Agents 1.6.6) + a session `reconciler`. The agent joins each inbound room unsubscribed and admits NO caller audio until the control plane authorizes the call: `POST /v1/calls/inbound/route` (worker `tai_` key) resolves the DID to the authoritative agent, then `GET /v1/calls/{call_id}/realtime-config` (the same worker key) returns the validated semantic config (system prompt, first message, language, Deepgram nova-3 STT, Gemini LLM, ElevenLabs TTS + voice, tool allowlist). Tool schemas come from MCP `tools/list` on `POST /mcp`, are exposed to the model ONLY if allowlisted, and every invocation re-crosses the call-bound `POST /v1/calls/{call_id}/agent-tool-calls` endpoint with an audit trail. Lifecycle events post to `POST /v1/gateway-deployments/{id}/call-lifecycle-events` and produce the authoritative billing verdict; artifacts upload to `POST /v1/calls/{call_id}/artifacts`. The reconciler closes sessions whose agent died so dangling billed minutes are impossible.
 
 ## The contract (gateway ↔ Cloud)
 
 The exact surface is [contracts/gateway-v1.yaml](contracts/gateway-v1.yaml) (v1.0.0 stable) plus [contracts/schemas/](contracts/schemas/). Endpoints the stack uses:
 
-- `POST /v1/calls/inbound/route` — resolve an inbound DID to the authoritative agent (worker token).
-- `GET /v1/agents/{agent_id}/realtime-config` — the validated per-call semantic config (gateway token).
-- `POST /mcp` — MCP `tools/list` / `tools/call` for allowlisted agent tools (worker token).
+- `POST /v1/calls/inbound/route` — resolve an inbound DID to the authoritative agent (worker `tai_` key).
+- `GET /v1/calls/{call_id}/realtime-config` — the validated per-call semantic config (worker `tai_` key).
+- `POST /mcp` — MCP `tools/list` schema discovery (worker `tai_` key; a `tgw_` gateway token is rejected).
+- `POST /v1/calls/{call_id}/agent-tool-calls` — allowlisted model-tool execution bound to that call.
 - `POST /v1/gateway-deployments/{id}/call-lifecycle-events` — lifecycle + authoritative billing verdict (gateway token).
 - `POST /v1/calls/{id}/artifacts` — upload call artifacts with duration provenance (gateway token).
 - `POST /v1/gateway-deployments/{id}/tokens` / `.../tokens/rotate` — mint / rotate the per-gateway `tgw_` token (shown once).
 - `GET /v1/gateway-deployments/{id}/number-rules` — routing read (also the smoke test's gateway-token probe).
 
-Auth: `Authorization: Bearer` from `OPENPHONEX_GATEWAY_API_TOKEN` (`tgw_...`, narrowly scoped) and `OPENPHONEX_WORKER_API_TOKEN` (organization-scoped; see SECURITY.md). The transport layer requires https (or verified loopback http) and refuses cross-origin redirects.
+Auth: `Authorization: Bearer` from `OPENPHONEX_GATEWAY_API_TOKEN` (`tgw_...`, narrowly scoped to its registered gateway) and `OPENPHONEX_WORKER_API_TOKEN` (`tai_...`, organization-scoped). The guided self-host worker baseline is `calls:read` + `calls:write`; it deliberately excludes global worker-job authority. The transport layer requires https (or verified loopback http) and refuses cross-origin redirects.
 
 ## Audio contract
 

@@ -127,7 +127,7 @@ def load_demo_profile(environ: Mapping[str, str]) -> DemoProfile:
     llm_model = str(
         environ.get("SCH236_GEMINI_MODEL")
         or environ.get("GEMINI_LLM_MODEL")
-        or "gemini-2.5-flash-lite"
+        or "gemini-3.5-flash-lite"
     ).strip()
     if not llm_model.startswith("gemini-"):
         raise DemoConfigurationError("SCH236_GEMINI_MODEL must be a Gemini model")

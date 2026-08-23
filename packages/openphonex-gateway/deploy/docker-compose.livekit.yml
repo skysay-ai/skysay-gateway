@@ -8,12 +8,15 @@
 # (prepare_inbound -> realtime-config; see SELFHOST.md).
 #
 #   services: redis + livekit-server + livekit-sip + agents + reconciler
-#             (+ profile-gated `outbound-worker` and one-shot `provision`)
+#             (+ profile-gated `outbound-worker`, `registrar`, and one-shot
+#              `provision`)
 #
 # Quickstart (full runbook: SELFHOST.md; step-by-step: repo-root INSTALL.md):
 #   cp livekit.yaml.example livekit.yaml       # fill in your LiveKit API key pair
 #   cp sip.yaml.example sip.yaml               # the SAME key pair
 #   cp .env.livekit.example .env.livekit       # control-plane + provider creds
+#   cp .env.registrar.example .env.registrar   # sidecar creds; leave the core four
+#                                              # blank unless you need registration mode
 #   mkdir -p sessions call-evidence && sudo chown -R 10001:10001 sessions call-evidence
 #   docker compose -f docker-compose.livekit.yml up -d --build
 #   docker compose -f docker-compose.livekit.yml --profile provision run --rm provision
@@ -44,8 +47,11 @@ services:
       retries: 30
 
   livekit:
-    # Same pin as the production voice box (livekit-server v1.13.4).
-    image: livekit/livekit-server:v1.13.4@sha256:189f7c81b704a36642bc5c7e2d3e1ae83744627c11978a23a251bf19fbec64e0
+    # Matches the production voice box as of 2026-08-11 (verified against the
+    # running container, not against another file in this repo). Nothing here
+    # enforces that: the production compose file is untracked, so this pin can
+    # drift again silently. Re-verify before claiming parity.
+    image: livekit/livekit-server:v1.13.5@sha256:3497163e15c48fef6e7830c78716f9e9d5edc28abf7aa90b61c86e93bbc306b1
     command: [--config, /run/sch236/livekit.yaml]
     network_mode: host
     restart: unless-stopped
@@ -90,6 +96,10 @@ services:
     environment:
       SCH236_SESSION_ROOT: /sessions
       SCH236_CALL_EVIDENCE_ROOT: /call-evidence
+      # The self-host worker baseline intentionally excludes the global
+      # worker_jobs:* heartbeat surface. Production retains its default-on
+      # release/readiness heartbeat; this deployment disables it explicitly.
+      OPENPHONEX_WORKER_HEARTBEAT_ENABLED: "0"
     volumes:
       - type: bind
         source: ./.env.livekit
@@ -122,6 +132,7 @@ services:
     environment:
       SCH236_SESSION_ROOT: /sessions
       SCH236_RECONCILE_STALE_SECONDS: "15"
+      OPENPHONEX_WORKER_HEARTBEAT_ENABLED: "0"
     volumes:
       - type: bind
         source: ./.env.livekit
@@ -158,6 +169,50 @@ services:
       sip:
         condition: service_started
 
+  registrar:
+    # OPTIONAL registering SIP sidecar — the self-host path for a host with NO
+    # reachable public address (home/office NAT, dynamic IP, CGNAT). It
+    # REGISTERs outbound to your carrier, holds that NAT pinhole open with a
+    # cheap keepalive, and proxies the carrier's INVITE to livekit-sip on
+    # loopback. It is a SIP PROXY, not a media element: RTP still flows
+    # directly between the carrier and livekit-sip, so the media path is
+    # byte-for-byte the one a public-IP deployment uses.
+    #
+    # Profile-gated and ADDITIVE: it listens on its own port (5062 by default)
+    # and forwards to livekit-sip's normal 5060, so `sip.yaml` and every other
+    # service are untouched. A public-IP deployment simply never starts it.
+    #   docker compose -f docker-compose.livekit.yml --profile registrar up -d
+    # See SELFHOST.md "Choosing your inbound topology".
+    profiles: [registrar]
+    build:
+      context: ./registrar
+    image: openphonex-sip-registrar:selfhost
+    network_mode: host
+    restart: unless-stopped
+    # Its OWN credential file, deliberately not .env.livekit. env_file passes
+    # the whole file — Docker cannot filter it — and this is the most exposed
+    # process in the stack: host-networked, parsing SIP off the internet.
+    # Handing it the control-plane tokens and provider keys would turn a bug in
+    # a SIP parser into a full credential compromise. Dropping to an
+    # unprivileged uid does not help; a process can always read its own environ.
+    env_file:
+      - ./.env.registrar
+    # A lapsed registration is silent: the process keeps running, the carrier
+    # may keep showing the endpoint as registered for a while, and calls simply
+    # stop arriving. The check is a script in the image rather than an inline
+    # command because getting it right is subtle -- Kamailio reuses its expiry
+    # field as a retry deadline, so the obvious "is it non-zero" test reports
+    # healthy throughout a total registration failure. See healthcheck.sh.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/openphonex-registrar-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    depends_on:
+      sip:
+        condition: service_started
+
   provision:
     # One-shot LiveKit SIP bootstrap (inbound trunk + dispatch rule for your
     # DID). Profile-gated: run it once after the stack is up, and again only
@@ -173,6 +228,24 @@ services:
     user: "0:0"
     network_mode: host
     restart: "no"
+    # The provisioner needs the SIP_REGISTRATION_* block to know which topology
+    # to provision: registration mode creates the trunk WITHOUT an address
+    # allowlist, because with the sidecar in front every INVITE arrives from
+    # this host. Without these it would provision a carrier allowlist that
+    # rejects every real call.
+    #
+    # This direction is safe and the reverse is not: the provisioner already
+    # holds every control-plane credential, so also giving it the sidecar's
+    # config grants nothing new. The registrar must still never be handed
+    # .env.livekit.
+    #
+    # Short form on purpose. The `required: false` long form is Compose 2.24+,
+    # and an older Compose rejects the WHOLE file at parse time -- which would
+    # stop a public-IP deployment that never touches this profile from starting
+    # at all. Measured on 2.23.3. Instead .env.registrar is created by every
+    # deployment (blank for a public-IP host), so it is always there to read.
+    env_file:
+      - ./.env.registrar
     volumes:
       - type: bind
         source: ./.env.livekit

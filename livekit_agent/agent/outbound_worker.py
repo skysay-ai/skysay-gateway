@@ -13,8 +13,10 @@ from typing import Any, Mapping
 
 try:
     from ..control_plane import Gate2ControlPlaneAdapter, UrllibJsonTransport
+    from ..production import terminate_pre_media_call
 except ImportError:  # flat /app import in the worker image
     from control_plane import Gate2ControlPlaneAdapter, UrllibJsonTransport
+    from production import terminate_pre_media_call
 
 
 AGENT_NAME = "sch236-livekit-demo"
@@ -24,6 +26,12 @@ DISPATCH_SCHEMA = "openphonex.outbound-dispatch.v1"
 
 class OutboundWorkerError(RuntimeError):
     pass
+
+
+class OutboundPostAdmissionError(OutboundWorkerError):
+    """A terminal outcome after the outbound authorization may have dialed."""
+
+    outbound_retry_safe = False
 
 
 def _required(environ: Mapping[str, str], name: str) -> str:
@@ -139,13 +147,27 @@ def _duration_limits(settings: OutboundWorkerSettings) -> dict[str, Any]:
     }
 
 
-async def _select_outbound_trunk(client: Any, api_module: Any, settings: OutboundWorkerSettings, from_e164: str) -> Any:
+async def _select_outbound_trunk(
+    client: Any,
+    api_module: Any,
+    settings: OutboundWorkerSettings,
+    from_e164: str,
+    *,
+    trunk_name: str = "",
+) -> Any:
+    # Per-number trunk dispatch: the control plane resolves the trunk name
+    # from the NUMBER's provider account (BYO SIP trunk carriers record
+    # theirs) and threads it through the job payload; the worker's
+    # env-configured name stays the default for managed numbers. Caller-ID
+    # membership remains a hard filter either way, so a job can never dial
+    # out of a trunk that does not carry its number.
+    wanted_name = str(trunk_name or "").strip() or settings.trunk_name
     response = await client.sip.list_outbound_trunk(api_module.ListSIPOutboundTrunkRequest())
     from_digits = from_e164.removeprefix("+")
     matches = [
         trunk
         for trunk in response.items
-        if str(getattr(trunk, "name", "")) == settings.trunk_name
+        if str(getattr(trunk, "name", "")) == wanted_name
         and from_digits in {str(number).removeprefix("+") for number in getattr(trunk, "numbers", ())}
     ]
     if len(matches) != 1:
@@ -173,25 +195,6 @@ async def originate_job(
         call_transport=worker_transport,
         tool_transport=worker_transport,
     )
-    call = await asyncio.to_thread(
-        adapter.prepare_outbound,
-        call_id=fields["call_id"],
-        agent_id=fields["agent_id"],
-        from_number_id=fields["from_number_id"],
-        to_e164=fields["to_e164"],
-        metadata=auth_metadata,
-    )
-    # Consumes the short-lived destination-bound token before any SIP dial.
-    await asyncio.to_thread(call.admit_media)
-
-    if api_module is None:
-        from livekit import api as api_module
-
-    client = api_module.LiveKitAPI(
-        settings.livekit_url,
-        settings.livekit_api_key,
-        settings.livekit_api_secret,
-    )
     room_name = f"opx-out-{_safe_id(fields['call_id'])}"
     participant_identity = f"pstn-{_safe_id(fields['call_id'])}"
     dispatch = {
@@ -199,10 +202,80 @@ async def originate_job(
         **fields,
         "participant_identity": participant_identity,
     }
-    room_created = False
-    answered = False
+    call: Any | None = None
+    client: Any | None = None
+    room_cleanup_required = False
+    participant_cleanup_required = False
+    may_have_originated = False
+    stage = "outbound_authorization"
+
+    async def terminate_failure() -> None:
+        async def remove_participant() -> None:
+            if client is None or not participant_cleanup_required:
+                return
+            await client.room.remove_participant(
+                api_module.RoomParticipantIdentity(
+                    room=room_name,
+                    identity=participant_identity,
+                )
+            )
+
+        async def delete_room() -> None:
+            if client is None or not room_cleanup_required:
+                return
+            await client.room.delete_room(api_module.DeleteRoomRequest(room=room_name))
+
+        await terminate_pre_media_call(
+            call=call,
+            adapter=adapter,
+            call_id=fields["call_id"],
+            reason={
+                "outbound_authorization": "outbound_authorization_rejected",
+                "outbound_media_admission": "outbound_media_admission_rejected",
+                "outbound_trunk": "outbound_trunk_rejected",
+                "outbound_room": "outbound_room_rejected",
+                "outbound_dispatch": "outbound_dispatch_rejected",
+                "outbound_sip_participant": "outbound_sip_participant_rejected",
+            }.get(stage, "outbound_pre_media_rejected"),
+            remove_participant=remove_participant,
+            delete_room=delete_room,
+        )
+
     try:
-        trunk = await _select_outbound_trunk(client, api_module, settings, fields["from_e164"])
+        call = await asyncio.to_thread(
+            adapter.prepare_outbound,
+            call_id=fields["call_id"],
+            agent_id=fields["agent_id"],
+            from_number_id=fields["from_number_id"],
+            to_e164=fields["to_e164"],
+            metadata=auth_metadata,
+        )
+        # Once this starts, a failure may race real SIP origination. The
+        # worker must settle the one claim terminally rather than redial.
+        stage = "outbound_media_admission"
+        may_have_originated = True
+        await asyncio.to_thread(call.admit_media)
+        if api_module is None:
+            from livekit import api as api_module
+        client = api_module.LiveKitAPI(
+            settings.livekit_url,
+            settings.livekit_api_key,
+            settings.livekit_api_secret,
+        )
+        stage = "outbound_trunk"
+        # Per-number trunk dispatch, read fresh from the job payload on every
+        # attempt, so a retry dials the same BYO trunk the control plane
+        # resolved for this number - never the env default by accident.
+        trunk = await _select_outbound_trunk(
+            client,
+            api_module,
+            settings,
+            fields["from_e164"],
+            trunk_name=str(payload.get("outbound_trunk_name") or ""),
+        )
+        # Set before the RPC: a timeout can occur after LiveKit created it.
+        room_cleanup_required = True
+        stage = "outbound_room"
         await client.room.create_room(
             api_module.CreateRoomRequest(
                 name=room_name,
@@ -211,7 +284,7 @@ async def originate_job(
                 max_participants=3,
             )
         )
-        room_created = True
+        stage = "outbound_dispatch"
         await client.agent_dispatch.create_dispatch(
             api_module.CreateAgentDispatchRequest(
                 agent_name=AGENT_NAME,
@@ -219,6 +292,10 @@ async def originate_job(
                 metadata=json.dumps(dispatch, sort_keys=True),
             )
         )
+        # A timeout can occur after the SIP participant exists; remove this
+        # deterministic identity before deleting the call-scoped room.
+        participant_cleanup_required = True
+        stage = "outbound_sip_participant"
         participant = await client.sip.create_sip_participant(
             api_module.CreateSIPParticipantRequest(
                 room_name=room_name,
@@ -240,7 +317,6 @@ async def originate_job(
             ),
             timeout=settings.ringing_timeout_seconds + 10,
         )
-        answered = True
         return {
             "executed": True,
             "provider": "livekit_sip",
@@ -253,25 +329,41 @@ async def originate_job(
             "to": _redact_phone(fields["to_e164"]),
             "secrets_redacted": True,
         }
-    except BaseException as exc:
-        try:
-            await asyncio.to_thread(
-                call.report_lifecycle,
-                event_id=f"{fields['call_id']}:sip-failed",
-                event_type="sip.failed",
-                source_component="livekit_sip",
-                details={"reason": type(exc).__name__},
-            )
-        except Exception:
-            pass
+    except asyncio.CancelledError:
+        await terminate_failure()
+        raise
+    except Exception as exc:
+        await terminate_failure()
+        if may_have_originated:
+            raise OutboundPostAdmissionError(
+                "outbound execution ended after media authorization"
+            ) from exc
         raise
     finally:
-        if room_created and not answered:
+        if client is not None:
             try:
-                await client.room.delete_room(api_module.DeleteRoomRequest(room=room_name))
+                await client.aclose()
             except Exception:
+                # A close failure must not hide the canonical SIP failure or
+                # change the worker's retry decision.
                 pass
-        await client.aclose()
+
+
+def _job_error_code(exc: BaseException) -> str:
+    """Exception CLASS NAMES only - never a message, which can carry provider detail.
+
+    A post-admission wrapper is terminal for the job, so on its own it tells an
+    operator nothing about WHY. Appending the wrapped class keeps a failure
+    caused by a per-number trunk that does not exist or does not carry the
+    caller ID (OutboundWorkerError) distinguishable from a transient SDK or
+    transport error, without widening what the job record reveals.
+    """
+
+    name = type(exc).__name__
+    cause = exc.__cause__
+    if cause is None or type(cause) is type(exc):
+        return name
+    return f"{name}:{type(cause).__name__}"
 
 
 class OutboundWorker:
@@ -330,16 +422,18 @@ class OutboundWorker:
                 {"result": result},
             )
             return {"claimed": True, "result": result, "job_status": completed.get("status", "succeeded")}
-        except BaseException as exc:
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
             failed = await asyncio.to_thread(
                 self.worker_transport.request,
                 "POST",
                 f"/v1/worker-jobs/{job['id']}/fail",
                 {
-                    "error": type(exc).__name__,
-                    "retry": True,
-                    "delay_seconds": 5,
-                    "max_attempts": 3,
+                    "error": _job_error_code(exc),
+                    "retry": bool(getattr(exc, "outbound_retry_safe", True)),
+                    "delay_seconds": 5 if getattr(exc, "outbound_retry_safe", True) else 0,
+                    "max_attempts": 3 if getattr(exc, "outbound_retry_safe", True) else 1,
                 },
             )
             return {

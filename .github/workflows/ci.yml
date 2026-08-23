@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
       - name: Install ffmpeg (optional realtime transcode runtime dependency)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Install packages (base — no heavy local-model extras)
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
       - name: Assert SPDX headers on first-party sources
         run: |
           python - <<'PY'

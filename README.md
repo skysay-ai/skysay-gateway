@@ -21,7 +21,7 @@ per-call config · lifecycle/billing events · artifact upload.
                     |
         UDP 5060 + RTP 10000-10100
                     v
-  [ livekit-sip v1.7.0 ] --- [ livekit-server v1.13.4 ] --- [ redis 8.8.0 ]
+  [ livekit-sip v1.7.0 ] --- [ livekit-server v1.13.5 ] --- [ redis 8.8.0 ]
                     \                 |
                      \                | (agent dispatch, host-local)
                       v               v
@@ -63,8 +63,9 @@ cd packages/openphonex-gateway/deploy
 bash selfhost-smoketest.sh   # PASS/FAIL per check; PASS = call-ready
 ```
 
-Pinned components (same tag **and** digest as production — enforced by
-release tests): livekit-server v1.13.4, livekit-sip v1.7.0, redis 8.8.0,
+Pinned components (tag **and** digest; livekit-server and livekit-sip match
+the production voice box as of 2026-08-11, redis intentionally does not —
+production is on 7.4.5-alpine): livekit-server v1.13.5, livekit-sip v1.7.0, redis 8.8.0,
 livekit-agents 1.6.6 (+ Deepgram/Google/ElevenLabs/Silero/turn-detector
 plugins, pip-pinned in
 [`livekit_agent/agent/requirements.txt`](livekit_agent/agent/requirements.txt)).

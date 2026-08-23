@@ -15,10 +15,15 @@ from .frames import TextChunk
 @dataclass(frozen=True)
 class GeminiStreamingLLMConfig:
     api_key: str
-    model_id: str = "gemini-2.5-flash-lite"
+    model_id: str = "gemini-3.5-flash-lite"
     temperature: float = 0.3
     max_output_tokens: int = 120
-    thinking_budget: int | None = 0
+    # How little the model may think, in the shape its family accepts. The 2.5
+    # models take a token budget and reject a level; 3.x replaced the budget
+    # with a level and rejects the budget. Neither is a superset, so pinning a
+    # 2.5 model means setting thinking_level=None and thinking_budget=0.
+    thinking_level: str | None = "minimal"
+    thinking_budget: int | None = None
     system_prompt: str = ""
     timeout_seconds: float = 30.0
 
@@ -66,7 +71,7 @@ class GeminiStreamingLLM:
                 raw = response.read().decode(errors="replace")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")
-            if "thinking" in detail.lower():
+            if self._rejected_the_thinking_config(detail):
                 payload = self._payload(messages, include_thinking=False)
                 request = self._request(payload, stream=False, model_id=model_id)
                 with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
@@ -100,7 +105,7 @@ class GeminiStreamingLLM:
                     yield from extract_gemini_parts(event)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")
-            if retry_without_thinking and "thinking" in detail.lower():
+            if retry_without_thinking and self._rejected_the_thinking_config(detail):
                 payload = self._payload(messages, tools=tools, include_thinking=False)
                 request = self._request(payload)
                 with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
@@ -108,6 +113,33 @@ class GeminiStreamingLLM:
                         yield from extract_gemini_parts(event)
                 return
             raise RuntimeError(f"Gemini streamGenerateContent HTTP {exc.code}: {detail[-800:]}") from exc
+
+    def _thinking_config(self) -> dict[str, object] | None:
+        if self.config.thinking_level is not None:
+            return {"thinkingLevel": self.config.thinking_level}
+        if self.config.thinking_budget is not None:
+            return {"thinkingBudget": self.config.thinking_budget}
+        return None
+
+    def _rejected_the_thinking_config(self, detail: str) -> bool:
+        """Whether a 4xx is the model refusing the thinking field we sent.
+
+        A model that has moved to the other shape answers a bare
+        ``INVALID_ARGUMENT`` naming no field at all, so matching on the word
+        alone leaves the caller with a hard failure instead of a reply.
+
+        The bare form is the whole signal, and it has to stay that narrow:
+        when the provider objects to some other field it says which, as
+        ``Invalid value at '<path>'``. Retrying those without thinking would
+        send the same rejected request a second time and report the wrong
+        cause.
+        """
+        lowered = detail.lower()
+        if "thinking" in lowered:
+            return True
+        if self._thinking_config() is None or "invalid_argument" not in lowered:
+            return False
+        return "invalid value at" not in lowered
 
     def _payload(
         self,
@@ -120,8 +152,10 @@ class GeminiStreamingLLM:
             "temperature": self.config.temperature,
             "maxOutputTokens": self.config.max_output_tokens,
         }
-        if include_thinking and self.config.thinking_budget is not None:
-            generation_config["thinkingConfig"] = {"thinkingBudget": self.config.thinking_budget}
+        if include_thinking:
+            thinking = self._thinking_config()
+            if thinking is not None:
+                generation_config["thinkingConfig"] = thinking
         payload: dict[str, object] = {
             "contents": _messages_to_contents(messages),
             "generationConfig": generation_config,

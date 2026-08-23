@@ -20,7 +20,20 @@ Environment (all documented in .env.livekit.example / INSTALL.md):
     LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET   (read by LiveKitAPI)
     SCH236_TEST_DID_E164     the DID this agent answers, E.164 with leading +
     DIDWW_INBOUND_ADDRESSES  comma-separated PUBLIC IPv4 CIDRs your carrier
-                             signals FROM (inbound allowlist)
+                             signals FROM (inbound allowlist). NOT required in
+                             registration mode -- see below.
+
+  Registration mode (a host behind NAT, using the `registrar` compose profile)
+    SIP_REGISTRATION_REGISTRAR + _USERNAME + _PASSWORD + _ALLOWED_ADDRESSES
+                             supply ALL FOUR or none. When set, the INVITE reaches
+                             livekit-sip via the local sidecar, so the source
+                             address is this host and a carrier allowlist on
+                             the trunk would reject every real call. The trunk
+                             is therefore provisioned WITHOUT an address
+                             allowlist (the DID number list is what LiveKit
+                             matches on) and the sidecar enforces the carrier
+                             allowlist instead, via
+                             SIP_REGISTRATION_ALLOWED_ADDRESSES.
 
   Optional (create an outbound trunk too — needed only to place calls OUT)
     DIDWW_OUTBOUND_HOST / DIDWW_OUTBOUND_FROM_USER
@@ -55,6 +68,15 @@ _E164_DIGITS = re.compile(r"[1-9][0-9]{6,14}")
 _HOSTNAME = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
+
+# The complete registration block. Partial configuration is refused rather than
+# silently interpreted as either mode -- see load_settings.
+_REGISTRATION_VARS = (
+    "SIP_REGISTRATION_REGISTRAR",
+    "SIP_REGISTRATION_USERNAME",
+    "SIP_REGISTRATION_PASSWORD",
+    "SIP_REGISTRATION_ALLOWED_ADDRESSES",
 )
 
 _OUTBOUND_VARS = (
@@ -154,6 +176,9 @@ class SelfhostSettings:
     did: str
     inbound_addresses: tuple[str, ...]
     outbound: OutboundSettings | None
+    # True when the registering SIP sidecar fronts livekit-sip. The trunk then
+    # carries no address allowlist, because every INVITE arrives from this host.
+    registration_mode: bool = False
 
 
 def _required(name: str, environ: dict[str, str]) -> str:
@@ -163,6 +188,87 @@ def _required(name: str, environ: dict[str, str]) -> str:
             f"missing required setting {name} (see .env.livekit.example / INSTALL.md)"
         )
     return value
+
+
+def _require_ipv4_host_port(value: str, name: str, *, public: bool = False) -> None:
+    """The sidecar needs these as literal IPv4 host:port, not names.
+
+    Its allowlist compares them against a packet's source address, so a
+    hostname cannot be used — and it refuses to start rather than resolve one
+    later. Checking here keeps that refusal from happening after the trunk has
+    already been swapped.
+
+    `public` additionally rejects private/reserved space, for the one of these
+    that is advertised to the carrier rather than used locally.
+    """
+    host, sep, port = value.rpartition(":")
+    if not sep or not host:
+        raise ProvisionConfigError(
+            f"{name} must be host:port, e.g. 127.0.0.1:5060 (got {value!r})"
+        )
+    if not port.isdigit() or not (1 <= int(port) <= 65535):
+        raise ProvisionConfigError(f"{name} port must be a port number (got {value!r})")
+    if host == "localhost":
+        if public:
+            raise ProvisionConfigError(
+                f"{name} must be a PUBLIC address — it is advertised to your carrier "
+                "as where to send calls, and 'localhost' sends them nowhere"
+            )
+        return
+    try:
+        parsed = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ProvisionConfigError(
+            f"{name} host must be an IPv4 address, not a name (got {host!r}); the "
+            "sidecar compares it against packet source addresses"
+        ) from exc
+    if parsed.version != 4:
+        raise ProvisionConfigError(f"{name} host must be IPv4 (got {host!r})")
+    if public:
+        network = ipaddress.ip_network(f"{host}/32")
+        if any(network.overlaps(reserved) for reserved in _NON_PUBLIC_NETS):
+            raise ProvisionConfigError(
+                f"{name} host {host!r} is in private/loopback/CGNAT/reserved space. "
+                "It is advertised to your carrier as the address to send calls to, so "
+                "it must be your PUBLIC address. Registration would succeed and no "
+                "call would ever arrive. Leave it empty unless you have a static "
+                "port-forward"
+            )
+
+
+def _parse_public_cidrs(raw: str, name: str) -> list[str]:
+    """Parse a comma-separated carrier allowlist, rejecting non-public space.
+
+    Used for both allowlists: the LiveKit trunk's (static-endpoint mode) and
+    the sidecar's (registration mode). They are alternatives to each other, so
+    they must be held to the same standard — and `0.0.0.0/0` in either one
+    disarms the boundary rather than narrowing it.
+    """
+    out: list[str] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError as exc:
+            raise ProvisionConfigError(
+                f"{name} entry {item!r} is not a valid IPv4 CIDR"
+            ) from exc
+        # Reject the WHOLE network if it overlaps any non-public range — a mixed
+        # range like 172.0.0.0/8 (which straddles the 172.16/12 private block)
+        # must not slip through a network-address-only `is_global` check.
+        if network.version != 4 or any(network.overlaps(r) for r in _NON_PUBLIC_NETS):
+            raise ProvisionConfigError(
+                f"{name} entry {item!r} overlaps private/loopback/link-local/"
+                "documentation/reserved space. Use YOUR carrier's real, fully-public signaling "
+                "ranges (from its portal) — a real carrier never sends INVITEs from those ranges. "
+                "Note a broad CIDR like 172.0.0.0/8 is rejected because it straddles private space"
+            )
+        out.append(str(network))
+    if not out:
+        raise ProvisionConfigError(f"{name} must list at least one public IPv4 CIDR")
+    return out
 
 
 def load_settings(environ: dict[str, str] | None = None) -> SelfhostSettings:
@@ -177,33 +283,143 @@ def load_settings(environ: dict[str, str] | None = None) -> SelfhostSettings:
             "SCH236_TEST_DID_E164 must be an E.164 number (leading + then digits), e.g. +15551230000"
         )
 
-    addresses: list[str] = []
-    for item in _required("DIDWW_INBOUND_ADDRESSES", environ).split(","):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            network = ipaddress.ip_network(item, strict=False)
-        except ValueError as exc:
+    # With the registering sidecar in front, livekit-sip sees THIS host as the
+    # source of every INVITE, never the carrier. An allowlist of carrier ranges
+    # would then reject every real call, so it is deliberately not applied and
+    # not required; the sidecar does the carrier filtering one hop earlier.
+    #
+    # That trade is only safe if the sidecar can actually RUN. Selecting the
+    # mode on the registrar variable alone meant a half-finished block --
+    # registrar set, credentials or allowlist missing -- would retire the
+    # protected trunk, create one with no allowlist, and leave the sidecar
+    # unable to start: an outage AND an unauthenticated SIP port. Demand the
+    # complete block, or none of it.
+    present = [
+        name for name in _REGISTRATION_VARS if (environ.get(name) or "").strip()
+    ]
+    if present and len(present) != len(_REGISTRATION_VARS):
+        missing = [name for name in _REGISTRATION_VARS if name not in present]
+        raise ProvisionConfigError(
+            "registration mode needs ALL of "
+            + ", ".join(_REGISTRATION_VARS)
+            + " (or none of them, for a host with a public IP); missing: "
+            + ", ".join(missing)
+            + ". Refusing to provision a trunk with no address allowlist while "
+            "the sidecar that would replace it cannot start."
+        )
+    registration_mode = len(present) == len(_REGISTRATION_VARS)
+    if registration_mode:
+        # Presence is not enough. Selecting the mode retires the allowlisted
+        # trunk, and a value the sidecar will reject at startup means it never
+        # comes back up -- the same outage, one layer in. Mirror the sidecar's
+        # own validation here, BEFORE anything is provisioned.
+        registrar = environ["SIP_REGISTRATION_REGISTRAR"].strip().lower()
+        if _HOSTNAME.fullmatch(registrar) is None:
             raise ProvisionConfigError(
-                f"DIDWW_INBOUND_ADDRESSES entry {item!r} is not a valid IPv4 CIDR"
-            ) from exc
-        # Reject the WHOLE network if it overlaps any non-public range — a mixed
-        # range like 172.0.0.0/8 (which straddles the 172.16/12 private block)
-        # must not slip through a network-address-only `is_global` check.
-        if network.version != 4 or any(network.overlaps(r) for r in _NON_PUBLIC_NETS):
-            raise ProvisionConfigError(
-                f"DIDWW_INBOUND_ADDRESSES entry {item!r} overlaps private/loopback/link-local/"
-                "documentation/reserved space. Use YOUR carrier's real, fully-public signaling "
-                "ranges (from its portal) — a real carrier never sends INVITEs from those ranges. "
-                "Note a broad CIDR like 172.0.0.0/8 is rejected because it straddles private space"
+                "SIP_REGISTRATION_REGISTRAR must be a bare DNS hostname with no "
+                f"scheme and no port, e.g. sip.yourcarrier.com (got: {registrar!r})"
             )
-        addresses.append(str(network))
-    if not addresses:
-        raise ProvisionConfigError("DIDWW_INBOUND_ADDRESSES must list at least one public IPv4 CIDR")
+        for name in ("SIP_REGISTRATION_USERNAME", "SIP_REGISTRATION_PASSWORD",
+                     "SIP_REGISTRATION_REALM"):
+            value = (environ.get(name) or "").strip()
+            if ":" in value:
+                raise ProvisionConfigError(
+                    f"{name} must not contain ':' — the sidecar stores it in a "
+                    "colon-delimited table and would refuse to start"
+                )
+            # These terminate the Kamailio config directive the sidecar
+            # substitutes them into, so it would fail to start — after this
+            # provisioner had already moved the trunk.
+            bad = sorted({ch for ch in '!"\\' if ch in value})
+            if bad:
+                raise ProvisionConfigError(
+                    f"{name} must not contain {', '.join(repr(c) for c in bad)} — "
+                    "the sidecar substitutes it into a config directive that "
+                    "those characters terminate, and it would refuse to start"
+                )
+            if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+                raise ProvisionConfigError(f"{name} contains control characters")
+        _parse_public_cidrs(
+            environ["SIP_REGISTRATION_ALLOWED_ADDRESSES"],
+            "SIP_REGISTRATION_ALLOWED_ADDRESSES",
+        )
+        # The optional settings are validated here too, not only at sidecar
+        # startup. Startup is AFTER this provisioner has retired the
+        # allowlisted trunk, so a value the sidecar rejects means inbound is
+        # down until someone notices. KEEPALIVE_SECONDS=30 is the plausible
+        # version of this: "NAT bindings expire at 30s" is the right instinct
+        # and the wrong number, and the sidecar refuses it.
+        keepalive = (environ.get("SIP_REGISTRATION_KEEPALIVE_SECONDS") or "").strip()
+        if keepalive:
+            if not keepalive.isdigit() or not (5 <= int(keepalive) <= 28):
+                raise ProvisionConfigError(
+                    "SIP_REGISTRATION_KEEPALIVE_SECONDS must be an integer in 5..28 "
+                    f"(got {keepalive!r}); NAT UDP bindings commonly expire at 30s, so "
+                    "the keepalive has to be strictly under it"
+                )
+        listen_port = (environ.get("SIP_REGISTRATION_LISTEN_PORT") or "").strip()
+        if listen_port and (not listen_port.isdigit() or not (1 <= int(listen_port) <= 65535)):
+            raise ProvisionConfigError(
+                f"SIP_REGISTRATION_LISTEN_PORT must be a port number (got {listen_port!r})"
+            )
+        target = (environ.get("SIP_REGISTRATION_TARGET") or "").strip()
+        if target:
+            _require_ipv4_host_port(target, "SIP_REGISTRATION_TARGET")
+        contact = (environ.get("SIP_REGISTRATION_CONTACT_ADDRESS") or "").strip()
+        if contact:
+            if contact.startswith(("sip:", "sips:")):
+                raise ProvisionConfigError(
+                    "SIP_REGISTRATION_CONTACT_ADDRESS must be bare host:port with no "
+                    f"sip: prefix (got {contact!r})"
+                )
+            # NOT the same rule as TARGET, despite the same shape. TARGET is
+            # where the sidecar forwards, so it is local by definition.
+            # CONTACT_ADDRESS is advertised TO THE CARRIER as where to send
+            # calls, so it must be publicly reachable. A private address here
+            # registers fine -- Contact is only a header -- the health check
+            # reports ONLINE, and no call ever arrives.
+            _require_ipv4_host_port(
+                contact, "SIP_REGISTRATION_CONTACT_ADDRESS", public=True
+            )
+        expires = (environ.get("SIP_REGISTRATION_EXPIRES") or "").strip()
+        if expires and (not expires.isdigit() or not (30 <= int(expires) <= 86400)):
+            raise ProvisionConfigError(
+                "SIP_REGISTRATION_EXPIRES must be a whole number of seconds between "
+                f"30 and 86400 (got {expires!r}); carriers enforce their own minimum "
+                "on top of that"
+            )
+        log_level = (environ.get("SIP_REGISTRATION_LOG_LEVEL") or "").strip()
+        if log_level:
+            try:
+                if not -3 <= int(log_level) <= 4:
+                    raise ValueError
+            except ValueError as exc:
+                raise ProvisionConfigError(
+                    "SIP_REGISTRATION_LOG_LEVEL must be a debug level between -3 and 4 "
+                    f"(got {log_level!r})"
+                ) from exc
+        return SelfhostSettings(
+            did=did,
+            inbound_addresses=(),
+            outbound=_load_outbound(environ),
+            registration_mode=True,
+        )
 
-    # Outbound is OPTIONAL: supply all four vars to also create an outbound
-    # trunk, or none to provision inbound-only.
+    addresses = _parse_public_cidrs(
+        _required("DIDWW_INBOUND_ADDRESSES", environ), "DIDWW_INBOUND_ADDRESSES"
+    )
+
+    outbound = _load_outbound(environ)
+
+    return SelfhostSettings(
+        did=did,
+        inbound_addresses=tuple(addresses),
+        outbound=outbound,
+    )
+
+
+def _load_outbound(environ: dict[str, str]) -> OutboundSettings | None:
+    """Outbound is OPTIONAL: supply all four vars, or none for inbound-only."""
     present = [name for name in _OUTBOUND_VARS if (environ.get(name) or "").strip()]
     outbound: OutboundSettings | None = None
     if present:
@@ -243,12 +459,7 @@ def load_settings(environ: dict[str, str] | None = None) -> SelfhostSettings:
             auth_username=auth_username,
             auth_password=auth_password,
         )
-
-    return SelfhostSettings(
-        did=did,
-        inbound_addresses=tuple(addresses),
-        outbound=outbound,
-    )
+    return outbound
 
 
 async def provision(*, api_module: Any | None = None, environ: dict[str, str] | None = None) -> dict[str, Any]:
@@ -355,6 +566,7 @@ async def provision(*, api_module: Any | None = None, environ: dict[str, str] | 
             "outbound_trunk_id": outbound_trunk_id,
             "codec": "PCMU/8000",
             "inbound_allowlist_cidrs": len(settings.inbound_addresses),
+            "inbound_source_policy": "sidecar" if settings.registration_mode else "carrier_allowlist",
             "stale_objects": stale,
         }
         print("SELFHOST_PROVISIONED " + json.dumps(result, sort_keys=True), flush=True)

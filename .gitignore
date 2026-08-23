@@ -6,6 +6,7 @@
 # Filled-in credentials (the *.example versions are tracked; these are not)
 **/.env
 **/.env.livekit
+**/.env.registrar
 **/livekit.yaml
 **/sip.yaml
 **/carrier.env

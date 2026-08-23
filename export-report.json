@@ -1,12 +1,12 @@
 {
-  "file_count": 106,
+  "file_count": 114,
   "files": {
     ".github/workflows/ci.yml": {
       "bytes": 2044,
       "origin": "generate:github-ci.yml"
     },
     ".gitignore": {
-      "bytes": 603,
+      "bytes": 621,
       "origin": "generate:gitignore"
     },
     "AGENTS.md": {
@@ -18,7 +18,7 @@
       "origin": "generate:CONTRIBUTING.md"
     },
     "INSTALL.md": {
-      "bytes": 11525,
+      "bytes": 23350,
       "origin": "generate:INSTALL.md"
     },
     "LICENSE": {
@@ -30,11 +30,11 @@
       "origin": "generate:NOTICE"
     },
     "README.md": {
-      "bytes": 5394,
+      "bytes": 5489,
       "origin": "generate:README.md"
     },
     "SECURITY.md": {
-      "bytes": 4961,
+      "bytes": 5331,
       "origin": "generate:SECURITY.md"
     },
     "THIRD_PARTY_LICENSES.md": {
@@ -169,7 +169,7 @@
       "spdx": "py"
     },
     "livekit_agent/agent/Dockerfile": {
-      "bytes": 1679,
+      "bytes": 1752,
       "origin": "generate:Dockerfile.livekit-agent"
     },
     "livekit_agent/agent/carrier-entrypoint.sh": {
@@ -178,22 +178,22 @@
       "spdx": "comment"
     },
     "livekit_agent/agent/outbound_worker.py": {
-      "bytes": 15124,
+      "bytes": 19257,
       "origin": "include:livekit_agent/agent/outbound_worker.py",
       "spdx": "py"
     },
     "livekit_agent/agent/production_agent.py": {
-      "bytes": 19642,
+      "bytes": 43948,
       "origin": "include:livekit_agent/agent/production_agent.py",
       "spdx": "py"
     },
     "livekit_agent/agent/provision_selfhost.py": {
-      "bytes": 17883,
+      "bytes": 28877,
       "origin": "generate:provision_selfhost.py",
       "spdx": "py"
     },
     "livekit_agent/agent/reconcile_sessions.py": {
-      "bytes": 2757,
+      "bytes": 6003,
       "origin": "include:livekit_agent/agent/reconcile_sessions.py",
       "spdx": "py"
     },
@@ -202,8 +202,23 @@
       "origin": "include:livekit_agent/agent/requirements.txt",
       "spdx": "comment"
     },
+    "livekit_agent/call_telemetry.py": {
+      "bytes": 17817,
+      "origin": "include:livekit_agent/call_telemetry.py",
+      "spdx": "py"
+    },
+    "livekit_agent/component_billing.py": {
+      "bytes": 15075,
+      "origin": "include:livekit_agent/component_billing.py",
+      "spdx": "py"
+    },
+    "livekit_agent/component_credentials.py": {
+      "bytes": 3259,
+      "origin": "include:livekit_agent/component_credentials.py",
+      "spdx": "py"
+    },
     "livekit_agent/control_plane.py": {
-      "bytes": 32141,
+      "bytes": 65451,
       "origin": "include:livekit_agent/control_plane.py",
       "spdx": "py"
     },
@@ -217,13 +232,8 @@
       "origin": "include:livekit_agent/evidence_contract.py",
       "spdx": "py"
     },
-    "livekit_agent/latency_evidence.py": {
-      "bytes": 6128,
-      "origin": "include:livekit_agent/latency_evidence.py",
-      "spdx": "py"
-    },
     "livekit_agent/livekit_evidence.py": {
-      "bytes": 10477,
+      "bytes": 20779,
       "origin": "include:livekit_agent/livekit_evidence.py",
       "spdx": "py"
     },
@@ -233,17 +243,22 @@
       "spdx": "py"
     },
     "livekit_agent/production.py": {
-      "bytes": 9928,
+      "bytes": 37961,
       "origin": "include:livekit_agent/production.py",
       "spdx": "py"
     },
     "livekit_agent/reconciliation.py": {
-      "bytes": 3025,
+      "bytes": 4856,
       "origin": "include:livekit_agent/reconciliation.py",
       "spdx": "py"
     },
+    "livekit_agent/workflow_turns.py": {
+      "bytes": 13462,
+      "origin": "include:livekit_agent/workflow_turns.py",
+      "spdx": "py"
+    },
     "llms-full.txt": {
-      "bytes": 22314,
+      "bytes": 34773,
       "origin": "generate:concat",
       "sources": [
         "README.md",
@@ -252,7 +267,7 @@
       ]
     },
     "llms.txt": {
-      "bytes": 5241,
+      "bytes": 5780,
       "origin": "generate:llms.txt"
     },
     "packages/openphonex-common/LICENSE": {
@@ -279,7 +294,7 @@
       "spdx": "py"
     },
     "packages/openphonex-common/pyproject.toml": {
-      "bytes": 394,
+      "bytes": 391,
       "origin": "include:packages/openphonex-common"
     },
     "packages/openphonex-gateway/LICENSE": {
@@ -291,15 +306,19 @@
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/.env.livekit.example": {
-      "bytes": 9843,
+      "bytes": 11144,
+      "origin": "include:packages/openphonex-gateway"
+    },
+    "packages/openphonex-gateway/deploy/.env.registrar.example": {
+      "bytes": 6178,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/SELFHOST.md": {
-      "bytes": 20517,
+      "bytes": 46942,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/docker-compose.livekit.yml": {
-      "bytes": 7078,
+      "bytes": 11106,
       "origin": "include:packages/openphonex-gateway",
       "rewritten": true
     },
@@ -307,8 +326,24 @@
       "bytes": 945,
       "origin": "include:packages/openphonex-gateway"
     },
+    "packages/openphonex-gateway/deploy/registrar/Dockerfile": {
+      "bytes": 2535,
+      "origin": "include:packages/openphonex-gateway"
+    },
+    "packages/openphonex-gateway/deploy/registrar/entrypoint.sh": {
+      "bytes": 19240,
+      "origin": "include:packages/openphonex-gateway"
+    },
+    "packages/openphonex-gateway/deploy/registrar/healthcheck.sh": {
+      "bytes": 1720,
+      "origin": "include:packages/openphonex-gateway"
+    },
+    "packages/openphonex-gateway/deploy/registrar/kamailio.cfg": {
+      "bytes": 10647,
+      "origin": "include:packages/openphonex-gateway"
+    },
     "packages/openphonex-gateway/deploy/selfhost-smoketest.sh": {
-      "bytes": 16252,
+      "bytes": 35140,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/sip.yaml.example": {
@@ -381,7 +416,7 @@
       "spdx": "py"
     },
     "packages/openphonex-gateway/openphonex_gateway/realtime/gemini_streaming.py": {
-      "bytes": 13691,
+      "bytes": 15323,
       "origin": "include:packages/openphonex-gateway",
       "spdx": "py"
     },
@@ -481,7 +516,7 @@
       "spdx": "py"
     },
     "packages/openphonex-gateway/openphonex_gateway/realtime/voice_evidence_cli.py": {
-      "bytes": 22146,
+      "bytes": 22175,
       "origin": "include:packages/openphonex-gateway",
       "spdx": "py"
     },
@@ -491,11 +526,11 @@
       "spdx": "py"
     },
     "packages/openphonex-gateway/pyproject.toml": {
-      "bytes": 2068,
+      "bytes": 2065,
       "origin": "include:packages/openphonex-gateway"
     },
     "tests/test_livekit_outbound_worker.py": {
-      "bytes": 6973,
+      "bytes": 15659,
       "origin": "include:tests/test_livekit_outbound_worker.py",
       "rewritten": true
     },
@@ -515,12 +550,12 @@
       "rewritten": true
     },
     "tests/test_sch172_livekit_control_plane.py": {
-      "bytes": 26980,
+      "bytes": 44645,
       "origin": "include:tests/test_sch172_livekit_control_plane.py",
       "rewritten": true
     },
     "tests/test_sch236_livekit_production.py": {
-      "bytes": 18289,
+      "bytes": 57118,
       "origin": "include:tests/test_sch236_livekit_production.py",
       "rewritten": true
     },
@@ -531,5 +566,5 @@
     }
   },
   "public_repo_name": "openphonex-gateway",
-  "total_bytes": 875393
+  "total_bytes": 1218209
 }

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from livekit_agent.control_plane import (
     ControlPlaneRejected,
+    Gate2CallSession,
     Gate2ControlPlaneAdapter,
     IncompleteArtifactEvidence,
     SessionStateError,
@@ -17,6 +18,7 @@ from livekit_agent.control_plane import (
     parse_outbound_dispatch,
 )
 from livekit_agent.evidence_contract import semantic_response_audio_policy
+from livekit_agent.call_telemetry import CallTelemetryCollector
 
 
 class FakeTransport:
@@ -119,6 +121,153 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         session.admit_media()
         self.assertTrue(session.media_admitted)
         self.assertEqual(session.audit_events[:4], ["authorization_allowed", "realtime_config_loaded", "authorization_consumed", "media_admitted"])
+
+    def test_platform_release_canary_session_is_non_billing_and_non_customer_state(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "purpose": "platform_release_canary",
+                    "source_e164": "+15551230001",
+                    "target_e164": "+15551230000",
+                    "config": _config(tools=[]),
+                }
+            ]
+        )
+        adapter = Gate2ControlPlaneAdapter(
+            gateway_id="gateway_1",
+            transport=FakeTransport([]),
+            platform_transport=transport,
+        )
+        session = adapter.prepare_platform_release_canary(
+            {
+                "purpose": "platform_release_canary",
+                "source_e164": "+15551230001",
+                "target_e164": "+15551230000",
+            },
+            "carrier-leg-1",
+        )
+        self.assertTrue(session.call_id.startswith("platform-release-canary-"))
+        session.admit_media()
+        self.assertEqual(session.tool_definitions(), [])
+        self.assertEqual(session.lease_component_credentials(), {})
+        self.assertEqual(session.report_lifecycle(event_type="sip.answered")["status"], "platform_release_canary")
+        self.assertEqual(session.complete(source_path=Path("."))["artifact_import"]["status"], "platform_release_canary")
+        # The carrier leg identity is sent so a retransmitted dispatch replays
+        # the claim its own leg spent. It is the only field: the worker
+        # describes which leg it is, never what the route should be.
+        self.assertEqual(
+            transport.calls,
+            [
+                (
+                    "POST",
+                    "/v1/platform-media/release-canary/route",
+                    {"provider_call_id": "carrier-leg-1"},
+                )
+            ],
+        )
+
+    def test_the_release_route_runs_without_caller_side_recording(self) -> None:
+        """The platform route has no recording, and must still be runnable.
+
+        Caller-side recording is a customer obligation: it exists so a
+        tenant's call produces the consent-bearing artifact set the platform
+        keeps. The release route creates no call record and no artifact, so
+        the control plane returns ``recording_enabled: False`` deliberately.
+        Rejecting that config rejects the only config this route can return,
+        and the leg dies about a second after the agent joins — after the
+        claim has already been spent, which makes the failure look like a
+        successful admission in every record outside the worker.
+        """
+        config = _config(tools=[])
+        config["recording_enabled"] = False
+        adapter = Gate2ControlPlaneAdapter(
+            gateway_id="gateway_1",
+            transport=FakeTransport([]),
+            platform_transport=FakeTransport(
+                [
+                    {
+                        "purpose": "platform_release_canary",
+                        "source_e164": "+15551230001",
+                        "target_e164": "+15551230000",
+                        "config": config,
+                    }
+                ]
+            ),
+        )
+        session = adapter.prepare_platform_release_canary(
+            {
+                "purpose": "platform_release_canary",
+                "source_e164": "+15551230001",
+                "target_e164": "+15551230000",
+            },
+            "carrier-leg-1",
+        )
+        session.admit_media()
+        self.assertTrue(session.media_admitted)
+
+    def test_a_customer_call_still_requires_caller_side_recording(self) -> None:
+        """Relaxing the release route must not relax the customer route.
+
+        The two share one validator, and only one of them owes a caller an
+        artifact.
+        """
+        config = _config()
+        config["recording_enabled"] = False
+        transport = FakeTransport(
+            [
+                {
+                    "id": "call_in_1",
+                    "status": "queued",
+                    "route": {
+                        "routed": True,
+                        "agent_id": "agent_1",
+                        "organization_id": "org_1",
+                        "project_id": "project_1",
+                    },
+                },
+                config,
+            ]
+        )
+        with self.assertRaises(ControlPlaneRejected):
+            self._adapter(transport).prepare_inbound(
+                to_e164="+15551230001",
+                from_e164="+15557654321",
+                provider_call_id="didww-call-1",
+            )
+
+    def test_a_refused_release_claim_never_downgrades_to_a_customer_call(self) -> None:
+        """An unarmed leg must fail the whole preparation, not fall back.
+
+        The reserved tuple reaching ``prepare_inbound`` is exactly the defect
+        this route exists to prevent: it would create the customer call,
+        billing entry, dashboard row, and usage record that a release proof
+        must never produce.
+        """
+
+        class RefusingTransport(FakeTransport):
+            def request(self, method: str, path: str, payload: dict | None = None) -> dict:
+                self.calls.append((method, path, payload))
+                raise ControlPlaneRejected("control plane returned HTTP 403: not armed")
+
+        transport = RefusingTransport([])
+        inbound = FakeTransport([])
+        adapter = Gate2ControlPlaneAdapter(
+            gateway_id="gateway_1",
+            transport=FakeTransport([]),
+            call_transport=inbound,
+            platform_transport=transport,
+        )
+        with self.assertRaises(ControlPlaneRejected):
+            adapter.prepare_platform_release_canary(
+                {
+                    "purpose": "platform_release_canary",
+                    "source_e164": "+15551230001",
+                    "target_e164": "+15551230000",
+                },
+                "carrier-leg-1",
+            )
+        self.assertEqual([path for _, path, _ in transport.calls], ["/v1/platform-media/release-canary/route"])
+        self.assertEqual(inbound.calls, [])
 
     def test_denied_authorization_never_fetches_config_or_admits_media(self) -> None:
         transport = FakeTransport([{"authorized": False, "token": None, "decision": {"decision": "blocked"}}])
@@ -226,7 +375,12 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
                 _config(),
             ]
         )
-        session = self._adapter(transport).prepare_inbound(
+        adapter = Gate2ControlPlaneAdapter(
+            gateway_id="gateway_1",
+            organization_id="org_1",
+            transport=transport,
+        )
+        session = adapter.prepare_inbound(
             to_e164="+15551230001",
             from_e164="+15557654321",
             provider_call_id="didww-call-1",
@@ -243,7 +397,7 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         session.admit_media()
         self.assertTrue(session.media_admitted)
         self.assertEqual(len(transport.calls), 2)
-        self.assertNotIn("organization_id", transport.calls[0][2])
+        self.assertEqual(transport.calls[0][2]["organization_id"], "org_1")
 
     def test_tool_allowlist_blocks_model_input_before_mcp(self) -> None:
         transport = FakeTransport(
@@ -270,6 +424,71 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         self.assertEqual([call[1] for call in transport.calls].count("/mcp"), 1)
         self.assertIn("/v1/calls/call_1/agent-tool-calls", [call[1] for call in transport.calls])
         self.assertIn("/v1/gateway-call-authorizations/consume", [call[1] for call in transport.calls])
+
+    def test_structured_builtin_tool_does_not_require_an_mcp_listing(self) -> None:
+        transport = FakeTransport([])
+        session = Gate2CallSession(
+            transport=transport,
+            authorization_transport=transport,
+            tool_transport=transport,
+            call_id="call_builtin",
+            gateway_id="gateway_1",
+            authorization_call_id="",
+            call_authorization_token="",
+            config=_config(tools=[{"type": "builtin", "name": "end_call"}]),
+            media_admitted=True,
+        )
+
+        self.assertEqual(
+            session.tool_definitions(),
+            [
+                {
+                    "name": "end_call",
+                    "description": "End the phone call politely once the caller's needs are met.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "message": {
+                                "type": "string",
+                                "description": "Final goodbye sentence to speak before hanging up.",
+                            }
+                        },
+                    },
+                }
+            ],
+        )
+        self.assertEqual(transport.calls, [])
+
+    def test_tool_execution_emits_only_safe_telemetry_correlation(self) -> None:
+        transport = FakeTransport(
+            [{"tool": "get_coverage", "ok": True, "telemetry_correlation_id": "audit_tool_1"}]
+        )
+        session = Gate2CallSession(
+            transport=transport,
+            authorization_transport=transport,
+            tool_transport=transport,
+            call_id="call_tool_telemetry",
+            gateway_id="gateway_1",
+            authorization_call_id="",
+            call_authorization_token="",
+            config=_config(tools=["get_coverage"]),
+            media_admitted=True,
+        )
+        observations: list[dict] = []
+        session.telemetry_observer = lambda **event: observations.append(event)
+
+        result = session.invoke_tool(
+            "get_coverage",
+            {"country": "EE", "private_query": "never serialize this text"},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0]["name"], "get_coverage")
+        self.assertEqual(observations[0]["audit_correlation_id"], "audit_tool_1")
+        self.assertGreater(observations[0]["input_characters"], 0)
+        self.assertNotIn("private_query", json.dumps(observations[0]))
+        self.assertNotIn("never serialize", json.dumps(observations[0]))
 
     def test_inbound_rejects_realtime_config_from_a_different_tenant(self) -> None:
         wrong = _config()
@@ -332,11 +551,20 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         self.assertEqual(ended["billing"]["settle_pricing"]["duration_sources"], {"call_events": 12.0})
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            # Restated for the mid-reply hangup fix: incomplete evidence is
+            # now uploaded and classified rather than discarded, but an
+            # evidence directory with NOTHING in it has no partial record to
+            # preserve, so completion still refuses and leaves the session
+            # un-completed for a retry.
             with self.assertRaises(IncompleteArtifactEvidence):
                 session.complete(
                     source_path=root,
                     duration_sources={"sip_participant": 12.0, "recording": 11.5},
                 )
+            self.assertEqual(
+                [path for _method, path, *_ in transport.calls if "artifacts" in path], []
+            )
+            self.assertNotIn("artifacts_imported", session.audit_events)
 
             for name in ("caller.wav", "agent.wav", "mixed.wav", "turn-001-caller.wav", "turn-001-agent.wav"):
                 _write_wav(root / name)
@@ -348,6 +576,14 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
                     }
                 )
             )
+            collector = CallTelemetryCollector(
+                call_id="call_1",
+                organization_id="org_1",
+                project_id="project_1",
+            )
+            collector.observe_user(text="private caller text", metrics={"transcription_delay": 0.2})
+            collector.observe_assistant(text="private assistant text", metrics={"e2e_latency": 0.4})
+            collector.write(root / "call-telemetry.json")
             result = session.complete(
                 source_path=root,
                 duration_sources={"sip_participant": 12.0, "room_track": 11.8, "recording": 11.5},
@@ -359,7 +595,166 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         self.assertEqual(transport.calls[-1][:2], ("POST", "/v1/calls/call_1/artifacts"))
         self.assertNotIn("duration_seconds", artifact_payload)
         self.assertIn("duration-provenance.json", {part["filename"] for part in artifact_payload["parts"]})
+        self.assertIn("call-telemetry.json", {part["filename"] for part in artifact_payload["parts"]})
+        self.assertNotIn("private caller text", json.dumps(artifact_payload))
+        self.assertNotIn("private assistant text", json.dumps(artifact_payload))
         self.assertEqual(session.audit_events[-1], "artifacts_imported")
+
+    def test_component_usage_is_posted_before_terminal_sip_settlement(self) -> None:
+        """Teardown ordering contract: telemetry/artifacts are later, but the
+        native billing report must reach the control plane before sip.ended."""
+        transport = FakeTransport(
+            [
+                {"authorized": True, "call_id": "call_1", "token": "tca_once", "decision": {"decision": "allowed"}},
+                _config(),
+                {"call_id": "call_1", "status": "consumed"},
+                {"call_id": "call_1", "duplicate": False},
+                {"canonical_type": "call.ended", "duplicate": False, "billing": {"status": "settled"}},
+            ]
+        )
+        session = self._adapter(transport).prepare_outbound(
+            call_id="call_1", agent_id="agent_1", from_number_id="number_1", to_e164="+15551230001", metadata={}
+        )
+        session.admit_media()
+        session.report_component_usage(
+            {
+                "source": "livekit_agent_sdk",
+                "stt_audio_seconds": 1,
+                "llm_input_tokens": 1,
+                "llm_cached_input_tokens": 0,
+                "llm_reasoning_tokens": 0,
+                "llm_output_tokens": 1,
+                "tts_characters": 1,
+                "tts_audio_seconds": 1,
+                "tool_units": {},
+            }
+        )
+        session.report_lifecycle(
+            event_id="sip-end-1",
+            event_type="sip.ended",
+            source_component="livekit_sip",
+        )
+        paths = [path for _method, path, _payload in transport.calls]
+        self.assertLess(paths.index("/v1/calls/call_1/billing-usage"), paths.index("/v1/gateway-deployments/gateway_1/call-lifecycle-events"))
+        self.assertIn("component_usage_reported", session.audit_events)
+
+    def test_terminal_payment_due_is_an_authoritative_billing_verdict(self) -> None:
+        """A completed call with an explicit above-reserve balance must not
+        be treated as a media/lifecycle failure by the worker gate."""
+        transport = FakeTransport(
+            [
+                {"authorized": True, "call_id": "call_1", "token": "tca_once", "decision": {"decision": "allowed"}},
+                _config(),
+                {"call_id": "call_1", "status": "consumed"},
+                {
+                    "canonical_type": "call.ended",
+                    "duplicate": False,
+                    "billing": {
+                        "status": "payment_due",
+                        "settled_amount_minor": 108,
+                        "uncollected_amount_minor": 400,
+                    },
+                },
+            ]
+        )
+        session = self._adapter(transport).prepare_outbound(
+            call_id="call_1", agent_id="agent_1", from_number_id="number_1", to_e164="+15551230001", metadata={}
+        )
+        session.admit_media()
+        result = session.report_lifecycle(
+            event_id="sip-payment-due", event_type="sip.ended", source_component="livekit_sip"
+        )
+        self.assertEqual(result["billing"]["status"], "payment_due")
+        self.assertTrue(session._lifecycle_finalized)
+
+    def test_component_usage_failed_post_is_retried_then_forwarded_with_terminal_event(self) -> None:
+        """The normal separate endpoint has a bounded retry; a failure is not
+        silently lost in worker memory before terminal settlement."""
+
+        class UsageUnavailableTransport(FakeTransport):
+            def request(self, method: str, path: str, payload: dict | None = None) -> dict:
+                if path == "/v1/calls/call_1/billing-usage":
+                    self.calls.append((method, path, payload))
+                    raise OSError("transient control-plane failure")
+                return super().request(method, path, payload)
+
+        usage = {
+            "source": "livekit_agent_sdk",
+            "stt_audio_seconds": 1,
+            "llm_input_tokens": 1,
+            "llm_cached_input_tokens": 0,
+            "llm_reasoning_tokens": 0,
+            "llm_output_tokens": 1,
+            "tts_characters": 1,
+            "tts_audio_seconds": 1,
+            "tool_units": {},
+        }
+        transport = UsageUnavailableTransport(
+            [
+                {"authorized": True, "call_id": "call_1", "token": "tca_once", "decision": {"decision": "allowed"}},
+                _config(),
+                {"call_id": "call_1", "status": "consumed"},
+                {"canonical_type": "call.ended", "duplicate": False, "billing": {"status": "settled"}},
+            ]
+        )
+        session = self._adapter(transport).prepare_outbound(
+            call_id="call_1", agent_id="agent_1", from_number_id="number_1", to_e164="+15551230001", metadata={}
+        )
+        session.admit_media()
+        with self.assertRaises(OSError):
+            session.report_component_usage(usage)
+        session.report_lifecycle(
+            event_id="sip-end-1", event_type="sip.ended", source_component="livekit_sip"
+        )
+        self.assertEqual(
+            [path for _method, path, _payload in transport.calls].count("/v1/calls/call_1/billing-usage"),
+            3,
+        )
+        terminal_payload = transport.calls[-1][2] or {}
+        self.assertEqual(terminal_payload["component_usage"], usage)
+        self.assertIn("component_usage_fallback_forwarded", session.audit_events)
+
+    def test_component_usage_http_503_is_retried_and_kept_for_terminal_fallback(self) -> None:
+        class Http503Transport(FakeTransport):
+            def request(self, method: str, path: str, payload: dict | None = None) -> dict:
+                if path == "/v1/calls/call_1/billing-usage":
+                    self.calls.append((method, path, payload))
+                    raise ControlPlaneRejected("control plane returned HTTP 503")
+                return super().request(method, path, payload)
+
+        usage = {
+            "source": "livekit_agent_sdk",
+            "stt_audio_seconds": 1,
+            "llm_input_tokens": 1,
+            "llm_cached_input_tokens": 0,
+            "llm_reasoning_tokens": 0,
+            "llm_output_tokens": 1,
+            "tts_characters": 1,
+            "tts_audio_seconds": 1,
+            "tool_units": {},
+        }
+        transport = Http503Transport(
+            [
+                {"authorized": True, "call_id": "call_1", "token": "tca_once", "decision": {"decision": "allowed"}},
+                _config(),
+                {"call_id": "call_1", "status": "consumed"},
+                {"canonical_type": "call.ended", "duplicate": False, "billing": {"status": "settled"}},
+            ]
+        )
+        session = self._adapter(transport).prepare_outbound(
+            call_id="call_1", agent_id="agent_1", from_number_id="number_1", to_e164="+15551230001", metadata={}
+        )
+        session.admit_media()
+        with self.assertRaisesRegex(ControlPlaneRejected, "503"):
+            session.report_component_usage(usage)
+        session.report_lifecycle(
+            event_id="sip-end-503", event_type="sip.ended", source_component="livekit_sip"
+        )
+        self.assertEqual(
+            [path for _method, path, _payload in transport.calls].count("/v1/calls/call_1/billing-usage"),
+            3,
+        )
+        self.assertEqual((transport.calls[-1][2] or {})["component_usage"], usage)
 
     def test_short_call_completion_explicitly_allows_base_recording_without_turn_clips(self) -> None:
         transport = FakeTransport(
@@ -412,8 +807,16 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         uploaded_names = {part["filename"] for part in transport.calls[-1][2]["parts"]}
         self.assertEqual(
             uploaded_names,
-            {"caller.wav", "agent.wav", "mixed.wav", "transcript.json", "duration-provenance.json"},
+            {
+                "caller.wav",
+                "agent.wav",
+                "mixed.wav",
+                "transcript.json",
+                "duration-provenance.json",
+                "evidence-status.json",
+            },
         )
+        self.assertEqual(result["evidence"]["status"], "complete")
 
     def test_strict_completion_rejects_base_recording_without_semantic_turns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

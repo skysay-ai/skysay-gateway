@@ -26,9 +26,15 @@ lives on the gateway host.
 
 The LiveKit stack additionally mounts `OPENPHONEX_WORKER_API_TOKEN` — an
 **organization-scoped** token used for inbound call routing
-(`POST /v1/calls/inbound/route`) and tool invocation (MCP `POST /mcp`). This
-**mirrors production**: routing and tools are organization operations, so the
-scope is deliberate, not an oversight. The practical consequence:
+(`POST /v1/calls/inbound/route`) and MCP schema discovery (`POST /mcp`
+`tools/list`; model calls are call-bound). This **mirrors production**:
+routing and tools are organization operations, so the scope is deliberate, not
+an oversight. The practical consequence:
+
+The guided self-host baseline grants only `calls:read` + `calls:write`. It
+deliberately omits the global `worker_jobs:*` authority; the self-host compose disables the
+non-critical global worker-heartbeat loop and does not enable the optional
+outbound-worker profile with this key.
 
 - **A compromised gateway box holds organization-wide call/tool authority.**
   Treat the host as sensitive infrastructure: minimal shell access, disk
@@ -73,7 +79,7 @@ for unrelated workloads, and rotate on any suspicion of compromise:
 |---|---|---|
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | LiveKit admin API pair (also in `livekit.yaml` / `sip.yaml`) | generate a new pair (`openssl rand -hex 32`), update all three files, restart the stack |
 | `OPENPHONEX_GATEWAY_API_TOKEN` (`tgw_...`) | per-gateway control-plane token (narrow scope) | `POST /v1/gateway-deployments/{id}/tokens/rotate` (old token revoked) |
-| `OPENPHONEX_WORKER_API_TOKEN` (`tai_...`) | **organization-scoped** worker token (inbound routing + MCP tools) — highest-value secret here | mint a new org worker token, update `.env.livekit`, restart `agents`+`reconciler`, revoke the old one |
+| `OPENPHONEX_WORKER_API_TOKEN` (`tai_...`) | **organization-scoped** worker token (inbound routing, call-bound config, and MCP `tools/list` schema discovery) — highest-value secret here | mint a new org worker token, update `.env.livekit`, restart `agents`+`reconciler`, revoke the old one |
 | `DEEPGRAM_API_KEY` / `GEMINI_API_KEY` / `ELEVENLABS_API_KEY` | AI-provider keys (STT/LLM/TTS) — billed to your provider accounts | rotate in each provider's console |
 | `DIDWW_OUTBOUND_AUTH_USERNAME` / `DIDWW_OUTBOUND_AUTH_PASSWORD` (optional) | outbound SIP trunk auth, only if you provision outbound | rotate in your carrier portal |
 
