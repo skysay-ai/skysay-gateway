@@ -23,7 +23,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 try:
     from .evidence_contract import (
@@ -1328,14 +1328,16 @@ def _component_billing_tool_names(config: dict[str, Any]) -> frozenset[str] | No
     if not isinstance(contract, dict):
         raise ControlPlaneRejected("component billing config omitted its pinned tool contract")
     names = contract.get("allowed_names")
-    if not isinstance(names, list) or len(names) > _COMPONENT_TOOL_NAME_LIMIT:
-        raise ControlPlaneRejected("component billing tool contract is invalid")
+    if not isinstance(names, list):
+        raise ControlPlaneRejected("component billing tool contract allowlist is invalid")
+    if len(names) > _COMPONENT_TOOL_NAME_LIMIT:
+        raise ControlPlaneRejected("component billing tool contract exceeds the bounded name limit")
     normalized = [str(name or "").strip() for name in names]
     if (
         len(set(normalized)) != len(normalized)
         or any(not _COMPONENT_TOOL_NAME_RE.fullmatch(name) for name in normalized)
     ):
-        raise ControlPlaneRejected("component billing tool contract is invalid")
+        raise ControlPlaneRejected("component billing tool contract has duplicate or unsafe names")
     return frozenset(normalized)
 
 

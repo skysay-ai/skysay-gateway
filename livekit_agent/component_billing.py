@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 import re
 from collections import defaultdict
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 
 class MeteringContractError(RuntimeError):
@@ -45,6 +45,18 @@ def _number(value: Any) -> float:
     if not math.isfinite(parsed) or parsed < 0:
         raise MeteringContractError("SDK usage contains an invalid value")
     return parsed
+
+
+def _whole_number(value: Any, *, field: str, maximum: int = 100_000_000) -> int:
+    """A bounded provider-native count that cannot be truncated on settlement."""
+    if value is None or value == "":
+        raise MeteringContractError(f"{field} requires exact native-unit evidence")
+    number = _number(value)
+    if not number.is_integer():
+        raise MeteringContractError(f"{field} must be a whole native-unit count")
+    if number > maximum:
+        raise MeteringContractError(f"{field} exceeds the bounded native-unit contract")
+    return int(number)
 
 
 def _expected_components(config: dict[str, Any]) -> dict[str, tuple[str, str]]:
@@ -241,6 +253,8 @@ def normalized_usage_from_model_usage(
     model_usage: Iterable[Any],
     *,
     tool_units: dict[str, int] | None = None,
+    tts_utf8_bytes: int | None = None,
+    soniox_usage: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return exact native usage for the pinned SDK adapter identities.
 
@@ -295,9 +309,62 @@ def normalized_usage_from_model_usage(
         safe_tools[key] = units
     if len(safe_tools) > TOOL_USAGE_MAX_NAMES or sum(safe_tools.values()) > TOOL_USAGE_MAX_TOTAL:
         raise MeteringContractError("tool usage exceeds the bounded billing contract")
+    expected_tts_provider = expected["tts"][0]
+    if expected_tts_provider == "fishaudio":
+        if tts_utf8_bytes is None or tts_utf8_bytes == "":
+            raise MeteringContractError("Fish Audio TTS usage omitted exact UTF-8 byte evidence")
+        native_tts_utf8_bytes = _whole_number(
+            tts_utf8_bytes,
+            field="Fish Audio TTS UTF-8 byte usage",
+            maximum=400_000_000,
+        )
+    elif tts_utf8_bytes is not None and _number(tts_utf8_bytes) != 0:
+        # A counter belonging to another provider proves the worker's stack
+        # identity drifted. Keep its unpriced integer out of settlement rather
+        # than carrying it as ambiguous evidence.
+        raise MeteringContractError("unexpected UTF-8 byte evidence for the selected TTS provider")
+    else:
+        native_tts_utf8_bytes = 0
+    token_dimensions = {
+        "stt": ("input_audio_tokens", "output_text_tokens"),
+        "tts": ("input_text_tokens", "output_audio_tokens"),
+    }
+    expected_soniox = {
+        component for component, (provider, _model) in expected.items() if provider == "soniox"
+    }
+    if expected_soniox - {"stt", "tts"}:
+        raise MeteringContractError("Soniox is only supported for exact STT/TTS token evidence")
+    if soniox_usage is None:
+        supplied_soniox: Mapping[str, Mapping[str, Any]] = {}
+    elif not isinstance(soniox_usage, Mapping):
+        raise MeteringContractError("Soniox usage evidence must be a component mapping")
+    else:
+        supplied_soniox = soniox_usage
+    supplied_names = {str(name) for name in supplied_soniox}
+    if supplied_names != expected_soniox:
+        raise MeteringContractError("Soniox usage evidence does not match the pinned component contract")
+    soniox_tokens: dict[str, int] = {
+        "stt_input_audio_tokens": 0,
+        "stt_output_text_tokens": 0,
+        "tts_input_text_tokens": 0,
+        "tts_output_audio_tokens": 0,
+    }
+    for component in sorted(expected_soniox):
+        raw_component = supplied_soniox.get(component)
+        if not isinstance(raw_component, Mapping):
+            raise MeteringContractError("Soniox usage evidence component is invalid")
+        dimensions = token_dimensions[component]
+        if set(raw_component) != set(dimensions):
+            raise MeteringContractError("Soniox usage evidence dimensions are incomplete")
+        for dimension in dimensions:
+            soniox_tokens[f"{component}_{dimension}"] = _whole_number(
+                raw_component[dimension], field=f"Soniox {component} {dimension}"
+            )
     return {
         "source": "livekit_agent_sdk",
         "stt_audio_seconds": totals["stt"]["audio_seconds"],
+        "stt_input_audio_tokens": soniox_tokens["stt_input_audio_tokens"],
+        "stt_output_text_tokens": soniox_tokens["stt_output_text_tokens"],
         "llm_input_tokens": int(totals["llm"]["input_tokens"]),
         "llm_cached_input_tokens": int(totals["llm"]["cached_input_tokens"]),
         # LiveKit Agents 1.6.6 exposes no separate reasoning count; Gemini's
@@ -306,5 +373,8 @@ def normalized_usage_from_model_usage(
         "llm_output_tokens": int(totals["llm"]["output_tokens"]),
         "tts_characters": int(totals["tts"]["characters"]),
         "tts_audio_seconds": totals["tts"]["audio_seconds"],
+        "tts_utf8_bytes": int(native_tts_utf8_bytes),
+        "tts_input_text_tokens": soniox_tokens["tts_input_text_tokens"],
+        "tts_output_audio_tokens": soniox_tokens["tts_output_audio_tokens"],
         "tool_units": safe_tools,
     }

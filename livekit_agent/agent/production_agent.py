@@ -68,6 +68,7 @@ from production import (
     inbound_sip_identity,
     post_livekit_worker_heartbeat,
     profile_from_realtime_config,
+    requires_soniox_usage_correlation,
     service_heartbeat_environ,
     terminate_pre_media_call,
     worker_heartbeats_enabled,
@@ -164,6 +165,8 @@ def setup_process(process: JobProcess) -> None:
             "livekit.plugins.deepgram",
             "livekit.plugins.google",
             "livekit.plugins.elevenlabs",
+            "livekit.plugins.soniox",
+            "livekit.plugins.fishaudio",
             "livekit.plugins.silero",
         )
     )
@@ -634,17 +637,31 @@ async def production_agent(ctx: JobContext) -> None:
         )
         # Built before admit_media(): a misconfigured provider (including a
         # rejected/missing BYOK lease) fails before caller audio is consumed.
+        # Fish's exact UTF-8 byte meter has no Soniox usage-log correlation.
+        # Do not label a Fish-only component-metered call as a Soniox stack;
+        # only the selected Soniox STT/TTS adapters need this opaque reference.
+        soniox_correlation_required = requires_soniox_usage_correlation(profile, call.config)
         stack = build_demo_stack(
             profile,
             environ=runtime_environ,
             load_vad=lambda **_kwargs: ctx.proc.userdata["vad"],
+            soniox_usage_reference=(
+                call.call_id
+                if soniox_correlation_required
+                else ""
+            ),
+            # New component-metered Soniox stacks need an opaque call
+            # reference before media. Historical pinned stacks without this
+            # billing contract remain runnable rather than being rewritten or
+            # newly rejected merely because the registry evolved.
+            require_soniox_usage_reference=soniox_correlation_required,
         )
         # This is the last operation before caller audio can be consumed.  It
         # must remain inside the pre-media guard: a rejected admission still
         # owns a ringing SIP leg and an existing wallet reservation.
         pre_media_stage = "media_admission"
         call.admit_media()
-    except BaseException as exc:
+    except BaseException:
         result = await terminate_pre_media_call(
             call=call,
             adapter=adapter,
@@ -936,21 +953,39 @@ async def production_agent(ctx: JobContext) -> None:
                 await asyncio.gather(*capture_tasks, return_exceptions=True)
             if isinstance(call.config.get("component_billing"), dict) and call.config["component_billing"].get("usage_required") is True:
                 try:
+                    if stack.soniox_usage_tracker is not None:
+                        try:
+                            soniox_usage = await asyncio.to_thread(stack.soniox_usage_tracker.collect)
+                        finally:
+                            stack.soniox_usage_tracker.discard_credentials()
+                    else:
+                        soniox_usage = None
                     usage_payload = normalized_usage_from_model_usage(
                         call.config,
                         billing_usage_collector.flatten(),
                         tool_units=(successful_tool_usage.snapshot() if successful_tool_usage else {}),
+                        tts_utf8_bytes=(
+                            stack.tts_utf8_byte_counter.snapshot()
+                            if stack.tts_utf8_byte_counter is not None
+                            else None
+                        ),
+                        soniox_usage=soniox_usage,
                     )
                     await asyncio.to_thread(call.report_component_usage, usage_payload)
                     emit(
                         "component_usage_reported",
                         call_id=call.call_id,
                         stt_audio_seconds=usage_payload["stt_audio_seconds"],
+                        stt_input_audio_tokens=usage_payload["stt_input_audio_tokens"],
+                        stt_output_text_tokens=usage_payload["stt_output_text_tokens"],
                         llm_input_tokens=usage_payload["llm_input_tokens"],
                         llm_cached_input_tokens=usage_payload["llm_cached_input_tokens"],
                         llm_output_tokens=usage_payload["llm_output_tokens"],
                         tts_characters=usage_payload["tts_characters"],
                         tts_audio_seconds=usage_payload["tts_audio_seconds"],
+                        tts_utf8_bytes=usage_payload["tts_utf8_bytes"],
+                        tts_input_text_tokens=usage_payload["tts_input_text_tokens"],
+                        tts_output_audio_tokens=usage_payload["tts_output_audio_tokens"],
                     )
                 except MeteringContractError as exc:
                     # Do not replace missing native evidence with a duration

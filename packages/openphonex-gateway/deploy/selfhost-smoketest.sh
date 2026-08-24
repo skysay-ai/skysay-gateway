@@ -128,6 +128,15 @@ if command -v curl >/dev/null 2>&1; then
 else
   fail "curl is installed" "Install curl; the HTTP checks below need it."
 fi
+# python3 was always a hard dependency here -- the control-plane URL classifier,
+# the service-account key check and the capability-manifest read all shell out
+# to it -- but nothing said so, so its absence surfaced as whichever of those
+# three ran first, blaming the wrong thing.
+if command -v python3 >/dev/null 2>&1; then
+  pass "python3 is installed"
+else
+  fail "python3 is installed" "Install python3; the control-plane URL classifier, the capability-manifest read and the service-account key check all use it."
+fi
 
 # --- 2. filled-in config files ------------------------------------------------
 for f in livekit.yaml sip.yaml .env.livekit .env.registrar; do
@@ -154,9 +163,66 @@ done
 # executed. `read -r` + `export "$k=$v"` assigns the value verbatim (the RHS is
 # not re-scanned for substitution). (The container entrypoint DOES source this
 # file, so keep values free of shell metacharacters — see .env.livekit.example.)
+# Which names each file assigned a NON-EMPTY value to. Two facts make this
+# necessary rather than pedantic:
+#
+#   * the agents container is handed .env.livekit as carrier.env and nothing
+#     else, so a value that happens to be exported in the shell running this
+#     script is invisible to the worker -- and the sidecar likewise sees only
+#     .env.registrar. One shared list would let a credential in the wrong file
+#     satisfy the wrong container.
+#   * the two files are read into one process environment, so a name in both
+#     leaves the shell holding whichever was read last. Recording emptiness per
+#     file, and asking membership rather than re-reading the value, keeps that
+#     shadowing out of the answer.
+#
+# Named ENV_KEYS_* rather than LIVEKIT_*: the release guard reads a
+# LIVEKIT_-prefixed name in this script as a setting an operator must find
+# documented in an example file, and these two are bookkeeping.
+ENV_KEYS_LIVEKIT=""
+ENV_KEYS_REGISTRAR=""
+_LAST_FILE_KEYS=""
+
+_strip_leading_blanks() {
+  _stripped="$1"
+  while :; do
+    case "$_stripped" in
+      ' '*) _stripped="${_stripped# }" ;;
+      "$(printf '\t')"*) _stripped="${_stripped#"$(printf '\t')"}" ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$_stripped"
+}
+
+_assigned() {
+  case " $1 " in
+    *" $2 "*) return 0 ;;
+  esac
+  return 1
+}
+
+# Assigned a non-empty value in .env.livekit -- the agents container's world.
+configured() { _assigned "$ENV_KEYS_LIVEKIT" "$1"; }
+# Assigned a non-empty value in .env.registrar -- the sidecar's world.
+configured_registrar() { _assigned "$ENV_KEYS_REGISTRAR" "$1"; }
+
 read_env_file() {
+  _LAST_FILE_KEYS=""
   [ -f "$1" ] || return 0
   while IFS= read -r _line || [ -n "$_line" ]; do
+    # Leading whitespace and an `export ` prefix are both valid dotenv --
+    # Compose accepts them, the container entrypoint `.`-sources this file
+    # where `export NAME=value` is plain shell, and the SIP_REGISTRATION
+    # contract below greps for exactly that prefix. Strip them rather than
+    # skipping the line: skipping means a variable the worker receives and
+    # this gate reports as missing.
+    _line="$(_strip_leading_blanks "$_line")"
+    case "$_line" in
+      export' '*|export"$(printf '\t')"*)
+        _line="$(_strip_leading_blanks "${_line#export}")"
+        ;;
+    esac
     case "$_line" in ''|'#'*) continue ;; esac
     _key="${_line%%=*}"
     case "$_key" in
@@ -164,18 +230,61 @@ read_env_file() {
       *[!A-Za-z0-9_]*) continue ;;      # not a shell identifier -> skip
     esac
     _val="${_line#*=}"
-    _val="${_val%$(printf '\r')}"      # CRLF files: Compose strips \r, so match it
+    # Strip a trailing CR so the checks below inspect the intended value. This
+    # is a courtesy, NOT a repair -- the container sources the file verbatim.
+    # The CRLF check after the reads is what tells the operator.
+    _val="${_val%$(printf '\r')}"
     case "$_val" in                     # strip one layer of surrounding quotes
       \"*\") _val="${_val#\"}"; _val="${_val%\"}" ;;
       \'*\') _val="${_val#\'}"; _val="${_val%\'}" ;;
     esac
     export "$_key=$_val"
+    # LAST assignment in the file wins, emptiness included: a duplicated line
+    # that blanks an earlier value is what the container ends up with, so a
+    # key recorded from the first of the pair would report a credential the
+    # worker does not have.
+    if [ -n "$_val" ]; then
+      _assigned "$_LAST_FILE_KEYS" "$_key" || _LAST_FILE_KEYS="$_LAST_FILE_KEYS $_key"
+    else
+      _rebuilt=""
+      for _seen in $_LAST_FILE_KEYS; do
+        [ "$_seen" = "$_key" ] || _rebuilt="$_rebuilt $_seen"
+      done
+      _LAST_FILE_KEYS="$_rebuilt"
+    fi
   done < "$1"
 }
-read_env_file .env.livekit
 # The sidecar's credentials live in their own file (see .env.registrar.example
-# for why they are not merged). Read it with the SAME non-evaluating parser.
+# for why they are not merged). Read it with the SAME non-evaluating parser --
+# and read it FIRST, so .env.livekit wins the shared process environment. That
+# is the provisioner's own precedence (it receives .env.registrar as
+# environment and then sources .env.livekit over the top), and it is what
+# makes the VALUES this script goes on to inspect -- the control-plane URL,
+# the service-account JSON, the DID list -- the ones the agents container is
+# handed. The reverse order left a name present in both files validated from
+# the wrong file. SIP_REGISTRATION_* cannot be shadowed the other way: the
+# contract below hard-fails any of those names appearing in .env.livekit.
 read_env_file .env.registrar
+ENV_KEYS_REGISTRAR="$_LAST_FILE_KEYS"
+read_env_file .env.livekit
+ENV_KEYS_LIVEKIT="$_LAST_FILE_KEYS"
+
+# CRLF is not cosmetic here. The container entrypoint SOURCES this file as
+# shell (`. /run/sch172/carrier.env`) rather than parsing it as dotenv, so a
+# carriage return stays inside every value: tokens 401, the control-plane URL
+# fails to classify, the DID is not E.164. The reader above strips CR before
+# the checks so they inspect what was meant -- which is exactly how a CRLF
+# file could otherwise reach RESULT: PASS while no value in the container is
+# the one on screen. Say so instead.
+for _f in .env.livekit .env.registrar; do
+  [ -f "$_f" ] || continue
+  if LC_ALL=C grep -q "$(printf '\r')" "$_f" 2>/dev/null; then
+    fail "$_f has Unix line endings" \
+      "it contains CR line endings. The container sources this file as shell, so every value keeps a trailing carriage return — the checks below strip it and would pass, the worker cannot. Convert it: LC_ALL=C sed -i.bak 's/\r\$//' $_f (or dos2unix $_f), then re-run."
+  else
+    pass "$_f has Unix line endings"
+  fi
+done
 
 # THE CONTRACT: SIP_REGISTRATION_* belongs in .env.registrar and nowhere else.
 # This is not tidiness. The provision container receives .env.registrar as
@@ -210,8 +319,7 @@ OPENPHONEX_CONTROL_PLANE_URL OPENPHONEX_GATEWAY_ID OPENPHONEX_GATEWAY_API_TOKEN 
 OPENPHONEX_WORKER_API_TOKEN OPENPHONEX_ORGANIZATION_ID SCH236_TEST_DID_E164"
 MISSING=""
 for v in $REQUIRED_VARS; do
-  eval "val=\${$v:-}"
-  [ -n "$val" ] || MISSING="$MISSING $v"
+  configured "$v" || MISSING="$MISSING $v"
 done
 if [ -z "$MISSING" ]; then
   pass "all required .env.livekit variables are set"
@@ -221,35 +329,124 @@ fi
 
 # WHICH provider keys you need is decided by the voice stack your agent
 # publishes, and this script cannot see that stack. But it does not have to
-# guess either: the worker accepts a fixed, small set of providers, so what is
+# guess either: the worker builds a known set of providers, so what is
 # *structurally* required follows from that set.
 #
 #   LLM  -- only gemini/google, so GEMINI_API_KEY is always needed.
-#   STT  -- deepgram (DEEPGRAM_API_KEY) or google chirp_2
-#           (GOOGLE_APPLICATION_CREDENTIALS[_JSON]); at least one.
-#   TTS  -- elevenlabs (ELEVENLABS_API_KEY) or gemini_tts, which reuses the
-#           Gemini key. So ElevenLabs is genuinely optional.
+#   STT  -- at least one of the STT providers this image can build.
+#   TTS  -- never demanded on its own: gemini_tts reuses the Gemini key.
 #
-# This check has been wrong in three different directions: demanding all three
-# failed a correct Deepgram+Gemini install, warning let an ElevenLabs-only
-# install report PASS with no STT and no LLM, and UNVERIFIED meant a documented
-# valid stack could never reach the PASS the runbook requires. Deriving it from
-# the provider set is the first version that is right for both.
-GEMINI_SET=0; [ -n "${GEMINI_API_KEY:-}" ] && GEMINI_SET=1
+# The provider set is deliberately NOT written out below. Part of it lives in
+# the capability manifest that ships beside the agent sources this compose file
+# builds from, and the copy that used to be pinned here went stale the first
+# time a provider was added: a correct Soniox-only install was hard-FAILed for
+# having "no STT credential", and an install holding only the three older keys
+# was told it covered every supported provider while a Tamil agent had nothing
+# to run on. So read the manifest instead of restating it.
+#
+# The three older providers predate the manifest and declare no credential
+# variable in it, so they are still named here. Every capability added since
+# resolves from the artifact, and adding another one needs no edit to this file.
+# ASK Compose where it builds the agent image from; do not imitate it. The
+# context is `${LIVEKIT_AGENT_CONTEXT:-...}`, and resolving that the way Compose
+# does means shell-versus-project-`.env` precedence, empty-value semantics,
+# quoting and inline-comment stripping -- a second implementation of Compose's
+# parser, which is exactly the thing that would drift from the first. `config`
+# resolves and prints; it starts nothing.
+AGENT_CONTEXT="$($COMPOSE config --format json 2>/dev/null | python3 -c '
+import json, sys
+
+try:
+    document = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+service = (document.get("services") or {}).get("agents") or {}
+context = str((service.get("build") or {}).get("context") or "").strip()
+if not context:
+    raise SystemExit(1)
+print(context)
+' 2>/dev/null)" || AGENT_CONTEXT=""
+# Compose could not answer (older Compose, an invalid file, no python3). Fall
+# back to the same default the compose file declares, and let the manifest
+# check below report the path it actually tried.
+[ -n "$AGENT_CONTEXT" ] || AGENT_CONTEXT="${LIVEKIT_AGENT_CONTEXT:-../../../livekit_agent}"
+CAPABILITY_MANIFEST="${AGENT_CONTEXT}/capabilities/capabilities.json"
+
+# component:VARIABLE pairs for every runnable capability that declares a
+# managed credential variable. Same default path as the agents service's build
+# context in docker-compose.livekit.yml, so the two cannot drift apart.
+if REGISTRY_CREDENTIALS=$(python3 - "$CAPABILITY_MANIFEST" <<'PY' 2>/dev/null
+import json, re, sys
+
+# The names below are expanded through `eval` in the shell, so accept only
+# shell identifiers. The manifest ships with the repo rather than arriving
+# from anywhere, but a file-derived string reaching eval is not a property to
+# leave resting on that.
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    doc = json.load(handle)
+rows = set()
+for capability in doc.get("capabilities") or []:
+    if capability.get("runnable") is not True:
+        continue
+    component = str(capability.get("component") or "").strip()
+    variable = str((capability.get("credential") or {}).get("managed_env") or "").strip()
+    if component in {"stt", "tts", "llm"} and IDENTIFIER.match(variable):
+        rows.add(f"{component}:{variable}")
+print(" ".join(sorted(rows)))
+PY
+); then
+  MANIFEST_READ=1
+else
+  MANIFEST_READ=0
+  REGISTRY_CREDENTIALS=""
+  if [ ! -f "$CAPABILITY_MANIFEST" ]; then
+    fail "the worker capability manifest is readable" \
+      "no file at ${CAPABILITY_MANIFEST} — this checkout is incomplete. That file ships beside the agent sources docker-compose.livekit.yml builds the image from, so if it is missing, \`docker compose up -d --build\` has nothing to build either. Re-clone the repository, or set LIVEKIT_AGENT_CONTEXT to the agent sources."
+  else
+    fail "the worker capability manifest is readable" \
+      "${CAPABILITY_MANIFEST} exists but could not be parsed. Either python3 is missing (see the tooling checks above) or the file is not valid JSON — restore it from the repository rather than editing it."
+  fi
+fi
+
+# Bash 3.2 on stock macOS has no associative arrays: keep these as
+# space-delimited lists and dedupe with a substring test.
+STT_REGISTRY_VARS=""
+ALL_REGISTRY_VARS=""
+for _entry in $REGISTRY_CREDENTIALS; do
+  _component=${_entry%%:*}
+  _variable=${_entry#*:}
+  case " $ALL_REGISTRY_VARS " in
+    *" $_variable "*) ;;
+    *) ALL_REGISTRY_VARS="$ALL_REGISTRY_VARS $_variable" ;;
+  esac
+  if [ "$_component" = "stt" ]; then
+    case " $STT_REGISTRY_VARS " in
+      *" $_variable "*) ;;
+      *) STT_REGISTRY_VARS="$STT_REGISTRY_VARS $_variable" ;;
+    esac
+  fi
+done
+
+GEMINI_SET=0; configured GEMINI_API_KEY && GEMINI_SET=1
 STT_SET=0
 STT_PATH_UNCHECKED=0
-[ -n "${DEEPGRAM_API_KEY:-}" ] && STT_SET=1
+configured DEEPGRAM_API_KEY && STT_SET=1
+for _variable in $STT_REGISTRY_VARS; do
+  configured "$_variable" && STT_SET=1
+done
 # A path is a CONTAINER path -- the key file is mounted read-only into the
 # agents service -- so this script, running on the host, cannot open it. Say
 # that rather than treating "non-empty" as "valid".
-if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
+if configured GOOGLE_APPLICATION_CREDENTIALS; then
   STT_SET=1
   STT_PATH_UNCHECKED=1
 fi
 # The inline variant IS checkable here, and a malformed value is a deterministic
 # first-call failure worth catching now: the agent needs real service-account
 # fields, so an empty object or a truncated paste must not read as configured.
-if [ -n "${GOOGLE_APPLICATION_CREDENTIALS_JSON:-}" ]; then
+if configured GOOGLE_APPLICATION_CREDENTIALS_JSON; then
   if GOOGLE_APPLICATION_CREDENTIALS_JSON="$GOOGLE_APPLICATION_CREDENTIALS_JSON" python3 -c '
 import json, os, sys
 try:
@@ -268,30 +465,48 @@ sys.exit(2 if missing else 0)
   fi
 fi
 
+STT_REGISTRY_HINT=""
+[ -n "$STT_REGISTRY_VARS" ] && STT_REGISTRY_HINT=", or one of:$STT_REGISTRY_VARS"
 if [ "$GEMINI_SET" -eq 0 ]; then
   fail "GEMINI_API_KEY is set" \
     "every supported stack resolves its model to Gemini, and Gemini TTS reuses the same key"
 elif [ "$STT_SET" -eq 0 ]; then
   fail "an STT credential is set" \
-    "set DEEPGRAM_API_KEY, or GOOGLE_APPLICATION_CREDENTIALS/_JSON for the Google chirp_2 path; no supported stack transcribes without one"
+    "set DEEPGRAM_API_KEY, or GOOGLE_APPLICATION_CREDENTIALS/_JSON for the Google chirp_2 path${STT_REGISTRY_HINT}; no supported stack transcribes without one"
 else
   # Deliberately the WEAKER claim, and it says so. This proves a runnable stack
   # is *possible* with the keys present; it cannot prove your agent's published
   # stack is covered, because that would mean reading the agent, and the
   # self-host worker key is scoped to calls:read + calls:write on purpose.
   #
-  # The two gaps this leaves, both surfacing on the first call rather than here:
-  # an agent publishing ElevenLabs TTS with no ELEVENLABS_API_KEY, and an agent
-  # publishing Deepgram STT when only the Google credentials are set.
+  # The gap this leaves surfaces on the first call rather than here: an agent
+  # publishing a provider whose key is absent -- ElevenLabs TTS with no
+  # ELEVENLABS_API_KEY, Deepgram STT when only the Google credentials are set,
+  # a Tamil stack with no Soniox or Fish key.
   MISSING_OPTIONAL=""
-  [ -n "${ELEVENLABS_API_KEY:-}" ] || MISSING_OPTIONAL="$MISSING_OPTIONAL ELEVENLABS_API_KEY"
-  [ -n "${DEEPGRAM_API_KEY:-}" ] || MISSING_OPTIONAL="$MISSING_OPTIONAL DEEPGRAM_API_KEY"
+  for _variable in ELEVENLABS_API_KEY DEEPGRAM_API_KEY $ALL_REGISTRY_VARS; do
+    case " $MISSING_OPTIONAL " in
+      *" $_variable "*) continue ;;
+    esac
+    configured "$_variable" || MISSING_OPTIONAL="$MISSING_OPTIONAL $_variable"
+  done
+  # Google is the fifth provider this image builds, and it is the ONLY
+  # transcriber for si-LK. Leaving it out of the count let an install with
+  # every other key be told it covered everything, while a Sinhala agent had
+  # no credential at all. It is a pair (path OR inline JSON), so one term.
+  if ! configured GOOGLE_APPLICATION_CREDENTIALS && ! configured GOOGLE_APPLICATION_CREDENTIALS_JSON; then
+    MISSING_OPTIONAL="$MISSING_OPTIONAL GOOGLE_APPLICATION_CREDENTIALS(_JSON)"
+  fi
   STT_CAVEAT=""
   [ "$STT_PATH_UNCHECKED" -eq 1 ] && STT_CAVEAT=" GOOGLE_APPLICATION_CREDENTIALS names a path inside the agents container, so its contents are not checked here."
-  if [ -n "$MISSING_OPTIONAL" ]; then
-    pass "provider credentials can run a supported stack (not set:$MISSING_OPTIONAL — this check cannot read your agent, so it proves a stack is possible, not that the one you published is covered.${STT_CAVEAT})"
+  # Without the manifest the enumeration above is incomplete, so the stronger
+  # sentence would be a claim this run has no evidence for.
+  MANIFEST_CAVEAT=""
+  [ "$MANIFEST_READ" -eq 0 ] && MANIFEST_CAVEAT=" The capability manifest could not be read, so the providers it declares were not considered at all."
+  if [ -n "$MISSING_OPTIONAL" ] || [ "$MANIFEST_READ" -eq 0 ]; then
+    pass "provider credentials can run a supported stack (not set:$MISSING_OPTIONAL — this check cannot read your agent, so it proves a stack is possible, not that the one you published is covered.${STT_CAVEAT}${MANIFEST_CAVEAT})"
   else
-    pass "provider credentials cover every supported provider.${STT_CAVEAT}"
+    pass "provider credentials cover every provider this image can build.${STT_CAVEAT}"
   fi
 fi
 
@@ -581,9 +796,13 @@ if [ "$REG_MODE" = 0 ] && $COMPOSE ps -a --services 2>/dev/null | grep -qx regis
 fi
 if [ "$REG_MODE" = 1 ]; then
   REG_MISSING=""
+  # Same invariant as .env.livekit, one file over: docker's `env_file` hands
+  # the sidecar .env.registrar, so a value living only in this shell is one the
+  # container never receives. Topology DETECTION above deliberately stays
+  # broad -- treating a deployment as registration mode runs MORE checks, so
+  # erring that way is the safe direction; erring here would skip them.
   for v in SIP_REGISTRATION_USERNAME SIP_REGISTRATION_PASSWORD SIP_REGISTRATION_ALLOWED_ADDRESSES; do
-    eval "val=\${$v:-}"
-    [ -n "$val" ] || REG_MISSING="$REG_MISSING $v"
+    configured_registrar "$v" || REG_MISSING="$REG_MISSING $v"
   done
   if [ -z "$REG_MISSING" ]; then
     pass "registration topology: all required SIP_REGISTRATION_* variables are set"

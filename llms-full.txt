@@ -378,6 +378,23 @@ instead). Set exactly **one** of the two GCP credential variables:
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | the same service-account JSON, inlined as one env var instead of a file | same service account as above | `{"type":"service_account",...}` |
 | `GOOGLE_STT_LOCATION` | Cloud Speech-to-Text v2 recognizer region (optional; default `asia-southeast1`, empirically verified for si-LK Chirp 2 — Chirp 3 rejects si-LK with an HTTP 400 in both `eu` and `us`) | you | `asia-southeast1` |
 
+**Optional — Tamil (ta-IN) voice stack** (only needed for an agent configured
+with `language: ta`). The worker serves `en`, `et` and `si` from the pipelines
+above; every language added since is declared in the capability manifest that
+ships with the agent sources, so a `ta` agent resolves to Soniox → Gemini →
+Soniox or Fish Audio instead. One Soniox key covers both its STT and its TTS.
+
+| Variable | What it is | Where to get it | Example |
+|---|---|---|---|
+| `SONIOX_API_KEY` | Soniox account key — STT **and** TTS. Required for any `ta` agent: it is the only transcriber the manifest declares for Tamil | soniox.com → console → API keys | `...` |
+| `FISH_AUDIO_API_KEY` | Fish Audio account key. Only if the agent's voice is a Fish Audio voice | fish.audio → account → API keys | `...` |
+
+Do **not** put `SONIOX_STT_API_KEY`, `SONIOX_TTS_API_KEY` or
+`FISH_AUDIO_TTS_API_KEY` in this file. Those are per-call lease names the
+control plane injects for a workspace that brings its own key; the worker
+treats one of them without its `OPENPHONEX_BYOK_*` marker as a corrupt lease
+and refuses the call, so a copy here takes that provider down completely.
+
 **Optional — registering SIP sidecar** (registration topology only; skip this
 entire section for a public-IP host). These live in their **own file**,
 `.env.registrar`, created blank in step 2 — never in `.env.livekit`.

@@ -43,9 +43,10 @@ whose compose file is not tracked in this repository.
 | `livekit/livekit-server` | `v1.13.5` (digest-pinned) |
 | `livekit/sip` | `v1.7.0` (digest-pinned) |
 | `redis` | `8.8.0-alpine` (digest-pinned) |
-| `livekit-agents` + Deepgram/Google/ElevenLabs/Silero/turn-detector plugins | `1.6.6` (pip-pinned in `livekit_agent/agent/requirements.txt`) |
+| `livekit-agents` + Deepgram/Google/ElevenLabs/Soniox/Fish Audio/Silero/turn-detector plugins | `1.6.6` (pip-pinned in `livekit_agent/agent/requirements.txt`) |
 | Voice pipeline (default) | Deepgram nova-3 → Gemini → ElevenLabs (resolved per call from realtime-config) |
 | Voice pipeline (si-LK / Sinhala) | Google Chirp 2 → Gemini → Gemini-TTS — see [Language stacks: Sinhala (si-LK)](#language-stacks-sinhala-si-lk) below |
+| Voice pipeline (ta-IN / Tamil) | Soniox → Gemini → Soniox or Fish Audio — see [Language stacks: Tamil (ta-IN)](#language-stacks-tamil-ta-in) below |
 
 ## Choosing your inbound topology
 
@@ -385,6 +386,7 @@ exchange.
 | 4 | From that control plane: an **organization id**, a registered **gateway deployment id**, two **different** credentials (`tgw_` for that gateway and `tai_` for its worker), and an **agent + phone-number route** configured for your DID | **API Keys → Gateway Tokens** creates the `tgw_`; the separate regular **API Keys** card creates the `tai_` worker key (both are shown once) |
 | 5 | Provider keys: `DEEPGRAM_API_KEY`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY` | console.deepgram.com / aistudio.google.com / elevenlabs.io |
 | 5b | *(only for si-LK / Sinhala agents)* a GCP service account for Cloud Speech-to-Text v2 | see [Language stacks: Sinhala (si-LK)](#language-stacks-sinhala-si-lk) below |
+| 5c | *(only for ta-IN / Tamil agents)* `SONIOX_API_KEY`, and `FISH_AUDIO_API_KEY` if the agent speaks with a Fish Audio voice | see [Language stacks: Tamil (ta-IN)](#language-stacks-tamil-ta-in) below |
 | 6 | Firewall: open `5060/udp` to the carrier's **signaling** ranges and `10000-10100/udp` to its **RTP / media** ranges (scope each range set separately). **Registration topology: instead DROP inbound `5060/udp` on both IPv4 and IPv6 except on loopback** — nothing needs to reach it unsolicited, and on a dual-stack host IPv6 has no NAT in front of it (see "Required: make `5060/udp` loopback-only") | your host/cloud firewall. LiveKit's own API and Redis bind loopback-only. `50000-50020/udp` is only needed if you later add WebRTC (browser) participants |
 
 ### Running on macOS
@@ -760,6 +762,48 @@ repo's automated validation of Gemini-TTS Sinhala output is a
 plugin-source-code / vendor-documentation check only — nobody on this change
 has heard the actual audio.** Listen to the synthesized sample yourself before
 routing real customer calls to it.
+
+## Language stacks: Tamil (ta-IN)
+
+The worker serves three languages from the pipelines above — `en`, `et` and
+`si` — and nothing else. Every language added since is served by a **capability
+manifest** that ships with the agent sources
+(`livekit_agent/capabilities/capabilities.json`), and Tamil is the first of
+them. So a `ta` agent never resolves to Deepgram or ElevenLabs; it resolves to
+whatever that manifest declares for `ta`:
+
+| Component | Provider | Credential |
+|---|---|---|
+| STT (transcriber) | Soniox `stt-rt-v5` | `SONIOX_API_KEY` |
+| LLM (model) | Gemini | same `GEMINI_API_KEY` as every other language |
+| TTS (voice) | Soniox `tts-rt-v2`, **or** Fish Audio `s2-pro` | `SONIOX_API_KEY` / `FISH_AUDIO_API_KEY` |
+
+One Soniox key covers both its STT and its TTS. If your agent speaks with a
+Fish Audio voice you need that key as well; if it speaks with the Soniox voice
+you do not.
+
+```dotenv
+# .env.livekit
+SONIOX_API_KEY=...          # required for any ta agent (it is the only transcriber)
+FISH_AUDIO_API_KEY=...      # only if the agent's voice is a Fish Audio voice
+```
+
+`selfhost-smoketest.sh` reads the same manifest rather than a list of its own,
+so it accepts a Tamil-only install (no Deepgram, no ElevenLabs) and tells you
+which declared credentials are still unset. It cannot tell you which ones
+*your* agent needs — that would mean reading the agent, and the self-host
+worker key is deliberately scoped to `calls:read` + `calls:write`.
+
+### Do not put a BYOK lease variable in `.env.livekit`
+
+A workspace can bring its own provider key per component. When it does, the
+control plane leases that key for **one call** under a component-scoped name —
+`SONIOX_STT_API_KEY`, `SONIOX_TTS_API_KEY`, `FISH_AUDIO_TTS_API_KEY` — beside
+an `OPENPHONEX_BYOK_*` marker. The worker refuses a call that has one of those
+names without its marker, rather than quietly billing the account key, so a
+copy of one in `.env.livekit` takes that provider down completely and reports
+an invalid credential marker that names neither the file nor the variable. The
+account keys above are the only provider values this file holds.
 
 ## Updating
 

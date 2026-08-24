@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "registry_version": "2026-08-23",
+  "runtime_languages": ["en", "et", "si", "ta"],
+  "legacy_runtime_languages": ["en", "et", "si"],
+  "runnable_registry_names": [
+    "fake",
+    "deepgram",
+    "faster_whisper",
+    "template",
+    "gemini",
+    "openai_compatible",
+    "ollama",
+    "vllm",
+    "local_llm",
+    "tone",
+    "elevenlabs",
+    "piper",
+    "kokoro",
+    "google",
+    "openai",
+    "elevenlabs_scribe",
+    "claude",
+    "anthropic",
+    "gpt",
+    "deepgram_tts",
+    "aura",
+    "cartesia",
+    "gemini_tts"
+  ],
+  "capabilities": [
+    {
+      "component": "stt",
+      "provider": "soniox",
+      "registry_name": "soniox",
+      "model": "stt-rt-v5",
+      "display": "Soniox Real-time STT v5",
+      "languages": ["en", "ta"],
+      "streaming": true,
+      "runnable": true,
+      "selectable": true,
+      "catalog": true,
+      "typical_latency_ms": 1900,
+      "credential": {
+        "managed_env": "SONIOX_API_KEY",
+        "byok_supported": true,
+        "validation": "soniox_models"
+      },
+      "billing": {
+        "unit": "token",
+        "rate_dimensions": [
+          {
+            "name": "input_audio_tokens",
+            "price_micro_usd_per_unit": 3,
+            "reserve_units_per_minute": 500
+          },
+          {
+            "name": "output_text_tokens",
+            "price_micro_usd_per_unit": 6,
+            "reserve_units_per_minute": 250
+          }
+        ],
+        "provider_price_basis": "Soniox real-time STT is priced at $2/M input-audio tokens and $4/M output-text tokens; 500 input-audio plus 250 output-text tokens/minute are the provider's public usage references observed 2026-08-22. Pinned managed retail is 1.5x those token rates."
+      }
+    },
+    {
+      "component": "tts",
+      "provider": "soniox",
+      "registry_name": "soniox",
+      "model": "tts-rt-v2",
+      "display": "Soniox Real-time TTS v2",
+      "languages": ["en", "ta"],
+      "streaming": true,
+      "runnable": true,
+      "selectable": true,
+      "catalog": true,
+      "typical_latency_ms": 800,
+      "credential": {
+        "managed_env": "SONIOX_API_KEY",
+        "byok_supported": true,
+        "validation": "soniox_models"
+      },
+      "billing": {
+        "unit": "token",
+        "rate_dimensions": [
+          {
+            "name": "input_text_tokens",
+            "price_micro_usd_per_unit": 5,
+            "reserve_units_per_minute": 250
+          },
+          {
+            "name": "output_audio_tokens",
+            "price_micro_usd_per_unit": 27,
+            "reserve_units_per_minute": 500
+          }
+        ],
+        "provider_price_basis": "Soniox real-time TTS is priced at $4/M input-text tokens and $21.50/M output-audio tokens; 250 input-text plus 500 output-audio tokens/minute are the provider's public usage references observed 2026-08-22. Pinned managed retail is 1.25x each token rate, rounded up to whole micro-USD."
+      },
+      "voices": [
+        {
+          "id": "Daniel",
+          "name": "Daniel",
+          "languages": ["en", "ta"],
+          "metadata": {
+            "description": "A rich, steady male voice with a polished tone, controlled pacing, and a reassuring presence that feels confident and mature.",
+            "gender": "male",
+            "provenance": {
+              "source": "Soniox TTS models API",
+              "observed_at": "2026-08-22"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "component": "tts",
+      "provider": "fishaudio",
+      "registry_name": "fishaudio",
+      "model": "s2-pro",
+      "display": "Fish Audio S2-Pro",
+      "languages": ["en", "ta"],
+      "streaming": true,
+      "runnable": true,
+      "selectable": true,
+      "catalog": true,
+      "typical_latency_ms": 561,
+      "credential": {
+        "managed_env": "FISH_AUDIO_API_KEY",
+        "byok_supported": true,
+        "validation": "fish_wallet"
+      },
+      "billing": {
+        "unit": "utf8_byte",
+        "price_micro_usd_per_unit": 19,
+        "reserve_units_per_minute": 5400,
+        "provider_price_basis": "Fish Audio paid S2 Pro public list price $15/M UTF-8 bytes observed 2026-08-22; retail is 1.25x rounded up."
+      },
+      "voices": [
+        {
+          "id": "933563129e564b19a115bedd57b7406a",
+          "name": "933563129e564b19a115bedd57b7406a",
+          "languages": ["en"],
+          "metadata": {
+            "provenance": {
+              "source": "Fish Audio LiveKit adapter default voice identifier",
+              "observed_at": "2026-08-22"
+            }
+          }
+        },
+        {
+          "id": "31792949c082466bab25d6f3327ac216",
+          "name": "tamil sneha",
+          "languages": ["ta"],
+          "recommended": true,
+          "metadata": {
+            "tags": ["female", "young", "social-media", "conversational", "entertainment", "medium", "friendly", "clear", "crisp", "energetic", "expressive", "confident", "storytelling"],
+            "provenance": {
+              "source": "Fish Audio models API tags",
+              "observed_at": "2026-08-22"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

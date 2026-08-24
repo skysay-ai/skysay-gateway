@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenPhonex voice capability registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "registry_version", "runtime_languages", "legacy_runtime_languages", "runnable_registry_names", "capabilities"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "registry_version": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "runtime_languages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}
+    },
+    "legacy_runtime_languages": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}
+    },
+    "runnable_registry_names": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/capability"}
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provenance"],
+      "properties": {
+        "description": {"type": "string"},
+        "tags": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "gender": {"type": "string", "enum": ["female", "male", "nonbinary"]},
+        "accent_locale": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"},
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "observed_at"],
+          "properties": {
+            "source": {"type": "string", "minLength": 1},
+            "observed_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+          }
+        }
+      }
+    },
+    "voice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "languages", "metadata"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "languages": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}},
+        "recommended": {"type": "boolean"},
+        "metadata": {"$ref": "#/$defs/metadata"}
+      }
+    },
+    "billing": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "oneOf": [
+        {
+          "required": ["unit", "price_micro_usd_per_unit", "reserve_units_per_minute"],
+          "properties": {
+            "unit": {"type": "string", "enum": ["audio_second", "character", "utf8_byte"]},
+            "price_micro_usd_per_unit": {"type": "integer", "minimum": 0},
+            "reserve_units_per_minute": {"type": "integer", "minimum": 0},
+            "provider_price_basis": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "required": ["unit", "rate_dimensions"],
+          "properties": {
+            "unit": {"const": "token"},
+            "rate_dimensions": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "price_micro_usd_per_unit", "reserve_units_per_minute"],
+                "properties": {
+                  "name": {"type": "string", "enum": ["input_audio_tokens", "output_text_tokens", "input_text_tokens", "output_audio_tokens"]},
+                  "price_micro_usd_per_unit": {"type": "integer", "minimum": 0},
+                  "reserve_units_per_minute": {"type": "integer", "minimum": 0}
+                }
+              }
+            },
+            "provider_price_basis": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    },
+    "credential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["managed_env", "byok_supported", "validation"],
+      "properties": {
+        "managed_env": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "byok_supported": {"type": "boolean"},
+        "validation": {"type": "string", "enum": ["soniox_models", "fish_wallet"]}
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "provider", "registry_name", "model", "display", "languages", "streaming", "runnable", "selectable", "catalog", "credential", "billing"],
+      "properties": {
+        "component": {"type": "string", "enum": ["stt", "tts"]},
+        "provider": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "registry_name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "model": {"type": "string", "minLength": 1},
+        "display": {"type": "string", "minLength": 1},
+        "languages": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}},
+        "streaming": {"type": "boolean"},
+        "runnable": {"type": "boolean"},
+        "selectable": {"type": "boolean"},
+        "catalog": {"type": "boolean"},
+        "typical_latency_ms": {"type": "integer", "minimum": 0},
+        "credential": {"$ref": "#/$defs/credential"},
+        "billing": {"$ref": "#/$defs/billing"},
+        "voices": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/voice"}}
+      }
+    }
+  }
+}

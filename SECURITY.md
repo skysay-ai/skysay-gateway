@@ -80,7 +80,8 @@ for unrelated workloads, and rotate on any suspicion of compromise:
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | LiveKit admin API pair (also in `livekit.yaml` / `sip.yaml`) | generate a new pair (`openssl rand -hex 32`), update all three files, restart the stack |
 | `OPENPHONEX_GATEWAY_API_TOKEN` (`tgw_...`) | per-gateway control-plane token (narrow scope) | `POST /v1/gateway-deployments/{id}/tokens/rotate` (old token revoked) |
 | `OPENPHONEX_WORKER_API_TOKEN` (`tai_...`) | **organization-scoped** worker token (inbound routing, call-bound config, and MCP `tools/list` schema discovery) — highest-value secret here | mint a new org worker token, update `.env.livekit`, restart `agents`+`reconciler`, revoke the old one |
-| `DEEPGRAM_API_KEY` / `GEMINI_API_KEY` / `ELEVENLABS_API_KEY` | AI-provider keys (STT/LLM/TTS) — billed to your provider accounts | rotate in each provider's console |
+| `DEEPGRAM_API_KEY` / `GEMINI_API_KEY` / `ELEVENLABS_API_KEY` / `SONIOX_API_KEY` / `FISH_AUDIO_API_KEY` | AI-provider keys (STT/LLM/TTS) — billed to your provider accounts. Which of them the host holds depends on the languages your agents speak; every one present is billable | rotate in each provider's console |
+| `GOOGLE_APPLICATION_CREDENTIALS` / `GOOGLE_APPLICATION_CREDENTIALS_JSON` (optional) | GCP **service-account private key** for Cloud Speech-to-Text v2, only if an agent speaks si-LK. A service-account key is not an API key: it can be used against whatever else that account is granted | GCP Console → IAM & Admin → Service Accounts → Keys: add a new key, update the file/variable, restart `agents`, then **delete** the old key |
 | `DIDWW_OUTBOUND_AUTH_USERNAME` / `DIDWW_OUTBOUND_AUTH_PASSWORD` (optional) | outbound SIP trunk auth, only if you provision outbound | rotate in your carrier portal |
 
 The worker token is the one to guard most closely (org-wide authority); the

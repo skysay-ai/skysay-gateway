@@ -23,6 +23,11 @@ try:  # package import in tests; flat /app import in the pinned worker image
 except ImportError:  # pragma: no cover - exercised by the container smoke test
     from demo import DemoProfile
 
+try:  # package import in tests; flat /app import in the pinned worker image
+    from .capabilities.registry import VoiceCapabilityError, load_registry
+except ImportError:  # pragma: no cover - exercised by the container smoke test
+    from capabilities.registry import VoiceCapabilityError, load_registry
+
 try:
     from .release_canary_contract import worker_heartbeat_metadata
 except ImportError:
@@ -202,49 +207,76 @@ def post_livekit_worker_heartbeat(
 # path -- Deepgram does not support Sinhala at all. Chirp 2 in the
 # asia-southeast1 recognizer location is the empirically verified si-LK
 # path (Chirp 3 rejects si-LK with an HTTP 400 in both eu and us).
-_STT_REGISTRY_MODELS: dict[str, str] = {
+_LEGACY_STT_REGISTRY_MODELS: dict[str, str] = {
     "deepgram": "nova-3",
     "google": "chirp_2",
 }
 # TTS registry_names this worker knows how to build. ElevenLabs is the default
 # English/Estonian path; ``gemini_tts`` (Gemini-TTS) is the si-LK (Sinhala)
 # path -- ElevenLabs does not support Sinhala at all.
-_TTS_REGISTRIES = frozenset({"elevenlabs", "gemini_tts"})
+_LEGACY_TTS_REGISTRIES = frozenset({"elevenlabs", "gemini_tts"})
+
+
+def requires_soniox_usage_correlation(profile: DemoProfile, config: Mapping[str, Any]) -> bool:
+    """Whether this exact selected stack needs Soniox usage-log references.
+
+    ``usage_required`` covers every component-metered call, including Fish's
+    independent UTF-8-byte TTS meter. Only a selected Soniox STT or TTS
+    adapter owns provider usage logs, however, so a Fish-only English stack
+    must never be classified as a Soniox correlation failure before media.
+    """
+    billing = config.get("component_billing")
+    return bool(
+        isinstance(billing, Mapping)
+        and billing.get("usage_required") is True
+        and (profile.stt_registry == "soniox" or profile.tts_registry == "soniox")
+    )
 
 
 def profile_from_realtime_config(config: dict[str, Any]) -> DemoProfile:
+    registry = load_registry()
     language = str(config.get("language") or "").strip().lower()
-    if language not in {"en", "et", "si"}:
-        raise ProductionConfigurationError("realtime-config language must be en, et, or si")
+    if language not in registry.runtime_languages:
+        raise ProductionConfigurationError("realtime-config language is absent from the worker capability registry")
+    supplied_revision = str(config.get("capability_revision") or "").strip()
+    if supplied_revision and supplied_revision != registry.revision:
+        raise ProductionConfigurationError("realtime-config capability revision does not match this worker image")
     transcriber = config.get("transcriber") if isinstance(config.get("transcriber"), dict) else {}
     model = config.get("model") if isinstance(config.get("model"), dict) else {}
     voice = config.get("voice") if isinstance(config.get("voice"), dict) else {}
 
     stt_registry = str(transcriber.get("registry_name") or "").lower()
-    expected_stt_model = _STT_REGISTRY_MODELS.get(stt_registry)
-    if expected_stt_model is None:
-        raise ProductionConfigurationError(
-            "realtime-config must resolve a supported STT provider (Deepgram or Google)"
-        )
-    if str(transcriber.get("model") or "") != expected_stt_model:
-        raise ProductionConfigurationError(
-            f"realtime-config must resolve {stt_registry} {expected_stt_model}"
-        )
+    stt_model = str(transcriber.get("model") or "").strip()
+    stt_provider = str(transcriber.get("provider") or stt_registry).lower()
+    stt_capability = registry.capability("stt", stt_provider, stt_model)
+    if stt_capability is not None:
+        if not stt_capability["runnable"] or language not in stt_capability["languages"]:
+            raise ProductionConfigurationError("realtime-config selects an unavailable STT capability")
+        if stt_registry != stt_capability["registry_name"]:
+            raise ProductionConfigurationError("realtime-config STT registry does not match the capability artifact")
+    else:
+        expected_stt_model = _LEGACY_STT_REGISTRY_MODELS.get(stt_registry)
+        if (
+            language not in registry.legacy_runtime_languages
+            or registry.owns_component_provider("stt", stt_provider)
+            or expected_stt_model is None
+            or stt_model != expected_stt_model
+        ):
+            raise ProductionConfigurationError("realtime-config must resolve a supported STT provider/model")
     if str(model.get("registry_name") or "").lower() not in {"gemini", "google"}:
         raise ProductionConfigurationError("realtime-config must resolve Gemini LLM")
     tts_registry = str(voice.get("registry_name") or "").lower()
-    if tts_registry not in _TTS_REGISTRIES:
-        raise ProductionConfigurationError(
-            "realtime-config must resolve a supported TTS provider (ElevenLabs or Gemini TTS)"
-        )
-
     voice_id = str(voice.get("voice_id") or "").strip()
     tts_model = str(voice.get("model") or "").strip()
+    tts_provider = str(voice.get("provider") or tts_registry).lower()
     llm_model = str(model.get("model") or "").strip()
     instructions = str(config.get("system_prompt") or "").strip()
     first_message = str(config.get("first_message") or "").strip()
     if not all((voice_id, tts_model, llm_model, instructions, first_message)):
         raise ProductionConfigurationError("realtime-config omitted runnable prompt/provider values")
+    # Keep the language policy error ahead of the generic registry error. A
+    # malformed Estonian payload should still tell an operator its one valid
+    # provider, rather than hiding that invariant behind "unsupported".
     if language == "et" and tts_registry != "elevenlabs":
         raise ProductionConfigurationError("Estonian requires ElevenLabs TTS")
     if language == "et" and "flash" in tts_model.lower():
@@ -254,6 +286,39 @@ def profile_from_realtime_config(config: dict[str, Any]) -> DemoProfile:
             "Sinhala requires Google Chirp STT and Gemini TTS (Deepgram and ElevenLabs do not "
             "support si-LK)"
         )
+    tts_capability = registry.capability("tts", tts_provider, tts_model)
+    if tts_capability is not None:
+        if not tts_capability["runnable"] or language not in tts_capability["languages"]:
+            raise ProductionConfigurationError("realtime-config selects an unavailable TTS capability")
+        if tts_registry != tts_capability["registry_name"]:
+            raise ProductionConfigurationError("realtime-config TTS registry does not match the capability artifact")
+        try:
+            registry.validate_runnable_voice(
+                str(tts_capability["provider"]), tts_model, voice_id, language=language
+            )
+        except VoiceCapabilityError as exc:
+            raise ProductionConfigurationError("realtime-config voice id is absent from the approved inventory") from exc
+    elif (
+        language not in registry.legacy_runtime_languages
+        or registry.owns_component_provider("tts", tts_provider)
+        or tts_registry not in _LEGACY_TTS_REGISTRIES
+    ):
+        raise ProductionConfigurationError("realtime-config must resolve a supported TTS provider/model")
+    if stt_capability is not None or tts_capability is not None:
+        if not supplied_revision:
+            raise ProductionConfigurationError(
+                "realtime-config capability revision is required for registry-backed components"
+            )
+    try:
+        registry.validate_registry_component_billing(
+            config,
+            stt_capability=stt_capability,
+            tts_capability=tts_capability,
+        )
+    except VoiceCapabilityError as exc:
+        raise ProductionConfigurationError(
+            "realtime-config registry-backed components require a complete billing contract"
+        ) from exc
 
     stt_language = str(transcriber.get("language") or language).strip()
     if language == "en" and stt_language == "en":
@@ -270,6 +335,12 @@ def profile_from_realtime_config(config: dict[str, Any]) -> DemoProfile:
         first_message=first_message,
         stt_registry=stt_registry,
         tts_registry=tts_registry,
+        stt_model=stt_model,
+        # Preserve the durable configuration value.  Registry-backed stacks
+        # have already proved this equals the packaged artifact above; legacy
+        # EN/ET/SI stacks deliberately have no such value and must not acquire
+        # one merely because this worker also ships the new capability source.
+        capability_revision=supplied_revision,
     )
 
 
@@ -287,10 +358,7 @@ def component_model_labels(profile: DemoProfile) -> dict[str, str]:
     """
 
     return {
-        # The profile carries no STT model of its own; the registry decides it,
-        # and profile_from_realtime_config has already rejected any config
-        # whose transcriber model disagrees with this map.
-        "stt": _STT_REGISTRY_MODELS.get(profile.stt_registry, ""),
+        "stt": profile.stt_model or _LEGACY_STT_REGISTRY_MODELS.get(profile.stt_registry, ""),
         "llm": profile.llm_model,
         "tts": profile.tts_model,
     }
