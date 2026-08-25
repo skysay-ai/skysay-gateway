@@ -35,6 +35,24 @@ class _Adapter:
         self.events.append(("prepared", kwargs["call_id"], kwargs["to_e164"]))
         return _Session(self.events)
 
+    def admit_local_outbound(self, **kwargs):
+        self.events.append(("admitted", kwargs.get("to_e164"), kwargs.get("from_phone_number")))
+        return (
+            {
+                "call_id": "call_local",
+                "agent_id": "agent_1",
+                "number_id": "number_1",
+                "from_phone_number": "+15551230000",
+                "to_phone_number": "+37255509999",
+                "outbound_trunk_name": "",
+            },
+            "tca_local",
+        )
+
+    def session_for_local_outbound(self, dial_plan, token):
+        self.events.append(("session", dial_plan["call_id"]))
+        return _Session(self.events)
+
     def report_failed_before_media(self, **_kwargs):
         self.events.append("sip_failed_reported")
         return {"canonical_type": "call.failed", "billing": {"status": "released"}}
@@ -380,6 +398,158 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
             "OPENPHONEX_ORGANIZATION_ID": "org_1",
         }
         self.assertFalse(worker.OutboundWorkerSettings.from_environ(environ).execute)
+
+
+class LocallyOriginatedCallTests(unittest.TestCase):
+    """A box that asks for the call it is about to place, with one credential."""
+
+    ENVIRON = {
+        "LIVEKIT_URL": "ws://127.0.0.1:7880",
+        "LIVEKIT_API_KEY": "key",
+        "LIVEKIT_API_SECRET": "secret",
+        "OPENPHONEX_CONTROL_PLANE_URL": "https://api.openphonex.com",
+        "OPENPHONEX_GATEWAY_ID": "gw_1",
+        "OPENPHONEX_GATEWAY_API_TOKEN": "tgw_secret",
+        "OPENPHONEX_ORGANIZATION_ID": "org_1",
+    }
+
+    def test_a_deployment_needs_no_organization_key_to_start(self):
+        settings = worker.OutboundWorkerSettings.from_environ(self.ENVIRON)
+        self.assertEqual(settings.worker_token, "")
+
+    def test_the_job_queue_still_says_which_credential_it_needs(self):
+        settings = worker.OutboundWorkerSettings.from_environ(self.ENVIRON)
+        with self.assertRaisesRegex(worker.OutboundWorkerError, "OPENPHONEX_WORKER_API_TOKEN"):
+            worker._transports(settings)
+
+    def test_admission_precedes_media_dispatch_and_the_dial(self):
+        events = []
+        _Adapter.events = events
+        api = _Api(events)
+        with patch.object(worker, "Gate2ControlPlaneAdapter", _Adapter), \
+             patch.object(worker, "_gateway_transport", return_value=object()), \
+             patch.object(worker, "_duration_limits", return_value={}):
+            result = asyncio.run(
+                worker.originate_local_call(
+                    _settings(worker_token=""),
+                    to_e164="+37255509999",
+                    from_phone_number="+15551230000",
+                    api_module=api,
+                )
+            )
+
+        self.assertEqual(result["call_status"], "answered")
+        self.assertEqual(result["call_id"], "call_local")
+        order = [item[0] if isinstance(item, tuple) else item for item in events]
+        self.assertLess(order.index("admitted"), order.index("authorization_consumed"))
+        self.assertLess(order.index("authorization_consumed"), order.index("room"))
+        self.assertLess(order.index("dispatch"), order.index("dial"))
+        dispatch = next(item for item in events if isinstance(item, tuple) and item[0] == "dispatch")
+        self.assertIn('"call_id": "call_local"', dispatch[3])
+        self.assertNotIn("tca_local", dispatch[3])
+        self.assertNotIn("tgw_secret", dispatch[3])
+
+    def test_the_execution_gate_is_enforced_by_this_path_itself(self):
+        """`docker compose run` ignores profiles, so the env gate is the gate."""
+        events = []
+        _Adapter.events = events
+        with patch.object(worker, "Gate2ControlPlaneAdapter", _Adapter), \
+             patch.object(worker, "_gateway_transport", return_value=object()):
+            with self.assertRaisesRegex(worker.OutboundWorkerError, "OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND"):
+                asyncio.run(
+                    worker.originate_local_call(
+                        _settings(worker_token="", execute=False),
+                        to_e164="+37255509999",
+                        from_phone_number="+15551230000",
+                    )
+                )
+        # Nothing was asked of the control plane, so nothing was reserved.
+        self.assertEqual(events, [])
+
+    def test_a_failed_dial_releases_the_reservation_for_the_admitted_call(self):
+        events = []
+        _Adapter.events = events
+        api = _Api(events, fail=True)
+        with patch.object(worker, "Gate2ControlPlaneAdapter", _Adapter), \
+             patch.object(worker, "_gateway_transport", return_value=object()), \
+             patch.object(worker, "_duration_limits", return_value={}):
+            with self.assertRaises(worker.OutboundPostAdmissionError):
+                asyncio.run(
+                    worker.originate_local_call(
+                        _settings(worker_token=""),
+                        to_e164="+37255509999",
+                        from_phone_number="+15551230000",
+                        api_module=api,
+                    )
+                )
+        self.assertIn("sip_failed_reported", events)
+        self.assertTrue(any(isinstance(item, tuple) and item[0] == "delete_room" for item in events))
+
+    def test_a_session_failure_after_admission_is_still_reported_against_the_call(self):
+        """The call already holds money once admission returns."""
+        events = []
+
+        class _BrokenSessionAdapter(_Adapter):
+            def session_for_local_outbound(self, dial_plan, token):
+                raise RuntimeError("realtime config rejected")
+
+            def report_failed_before_media(self, **kwargs):
+                self.events.append(("sip_failed_reported", kwargs["call_id"]))
+                return {"canonical_type": "call.failed", "billing": {"status": "released"}}
+
+        _BrokenSessionAdapter.events = events
+        with patch.object(worker, "Gate2ControlPlaneAdapter", _BrokenSessionAdapter), \
+             patch.object(worker, "_gateway_transport", return_value=object()):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(
+                    worker.originate_local_call(
+                        _settings(worker_token=""),
+                        to_e164="+37255509999",
+                        from_phone_number="+15551230000",
+                    )
+                )
+        self.assertIn(("sip_failed_reported", "call_local"), events)
+
+    def test_the_originate_command_refuses_a_destination_that_is_not_e164(self):
+        with patch.dict("os.environ", self.ENVIRON, clear=False):
+            self.assertEqual(worker.main(["originate", "--to", "0037255509999", "--purpose", "support", "--reason", "confirm"]), 1)
+
+    def test_the_originate_command_refuses_when_no_caller_id_is_configured(self):
+        environ = dict(self.ENVIRON)
+        environ["SCH236_TEST_DID_E164"] = ""
+        with patch.dict("os.environ", environ, clear=False):
+            self.assertEqual(worker.main(["originate", "--to", "+37255509999", "--purpose", "support", "--reason", "confirm"]), 1)
+
+    def test_the_originate_command_defaults_the_caller_id_to_the_served_number(self):
+        environ = dict(self.ENVIRON)
+        environ["SCH236_TEST_DID_E164"] = "+15551230000,+37255501234"
+        environ["OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND"] = "1"
+        placed = {}
+
+        async def _placed(settings, **kwargs):
+            placed.update(kwargs)
+            return {"executed": True, "call_id": "call_local", "secrets_redacted": True}
+
+        with patch.dict("os.environ", environ, clear=False), \
+             patch.object(worker, "originate_local_call", _placed):
+            self.assertEqual(
+                worker.main(
+                    ["originate", "--to", "+37255509999", "--purpose", "support", "--reason", "confirm"]
+                ),
+                0,
+            )
+        self.assertEqual(placed["to_e164"], "+37255509999")
+        self.assertEqual(placed["from_phone_number"], "+15551230000")
+        self.assertEqual(placed["request"]["purpose"], "support")
+        self.assertEqual(placed["request"]["user_authorization"]["reason"], "confirm")
+        self.assertNotIn("organization_id", placed["request"])
+
+    def test_the_originate_command_will_not_invent_a_purpose_or_a_reason(self):
+        with patch.dict("os.environ", self.ENVIRON, clear=False):
+            with self.assertRaises(SystemExit):
+                worker.main(["originate", "--to", "+37255509999"])
+            with self.assertRaises(SystemExit):
+                worker.main(["originate", "--to", "+37255509999", "--purpose", "support"])
 
 
 if __name__ == "__main__":

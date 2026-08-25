@@ -41,6 +41,10 @@ def _required(environ: Mapping[str, str], name: str) -> str:
     return value
 
 
+def _optional(environ: Mapping[str, str], name: str) -> str:
+    return str(environ.get(name) or "").strip()
+
+
 def _enabled(environ: Mapping[str, str], name: str) -> bool:
     return str(environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -89,7 +93,13 @@ class OutboundWorkerSettings:
             control_plane_url=_required(environ, "OPENPHONEX_CONTROL_PLANE_URL"),
             gateway_id=_required(environ, "OPENPHONEX_GATEWAY_ID"),
             gateway_token=_required(environ, "OPENPHONEX_GATEWAY_API_TOKEN"),
-            worker_token=_required(environ, "OPENPHONEX_WORKER_API_TOKEN"),
+            # Only the QUEUE originator needs this: claiming jobs is
+            # organization authority. A box that originates its own calls
+            # locally never claims anything, so it sets no organization-scoped
+            # key at all -- and `_require_worker_token` below is what makes
+            # that a clear refusal on the paths that do need one, instead of a
+            # missing-setting error on a box that legitimately has none.
+            worker_token=_optional(environ, "OPENPHONEX_WORKER_API_TOKEN"),
             organization_id=_required(environ, "OPENPHONEX_ORGANIZATION_ID"),
             worker_id=str(environ.get("OPENPHONEX_OUTBOUND_WORKER_ID") or "livekit-outbound-1").strip(),
             trunk_name=str(environ.get("OPENPHONEX_OUTBOUND_TRUNK_NAME") or OUTBOUND_TRUNK_NAME).strip(),
@@ -100,16 +110,28 @@ class OutboundWorkerSettings:
         )
 
 
-def _transports(settings: OutboundWorkerSettings) -> tuple[UrllibJsonTransport, UrllibJsonTransport]:
-    gateway = UrllibJsonTransport(
+def _gateway_transport(settings: OutboundWorkerSettings) -> UrllibJsonTransport:
+    return UrllibJsonTransport(
         base_url=settings.control_plane_url,
         bearer_token=settings.gateway_token,
     )
+
+
+def _require_worker_token(settings: OutboundWorkerSettings) -> str:
+    if not settings.worker_token:
+        raise OutboundWorkerError(
+            "the outbound job queue needs OPENPHONEX_WORKER_API_TOKEN; a deployment that "
+            "originates its own calls uses `originate` instead and needs no organization key"
+        )
+    return settings.worker_token
+
+
+def _transports(settings: OutboundWorkerSettings) -> tuple[UrllibJsonTransport, UrllibJsonTransport]:
     worker = UrllibJsonTransport(
         base_url=settings.control_plane_url,
-        bearer_token=settings.worker_token,
+        bearer_token=_require_worker_token(settings),
     )
-    return gateway, worker
+    return _gateway_transport(settings), worker
 
 
 def _validate_job(settings: OutboundWorkerSettings, job: dict[str, Any]) -> dict[str, str]:
@@ -177,37 +199,44 @@ async def _select_outbound_trunk(
     return matches[0]
 
 
-async def originate_job(
+async def _originate_admitted_call(
     settings: OutboundWorkerSettings,
-    job: dict[str, Any],
+    adapter: Any,
+    admit: Any,
     *,
+    known_call_id: str = "",
     api_module: Any | None = None,
 ) -> dict[str, Any]:
-    fields = _validate_job(settings, job)
-    gateway_transport, worker_transport = _transports(settings)
-    payload = job["payload"]
-    auth_metadata = payload.get("authorization_metadata")
-    if not isinstance(auth_metadata, dict):
-        auth_metadata = {"channel": "voice"}
-    adapter = Gate2ControlPlaneAdapter(
-        gateway_id=settings.gateway_id,
-        transport=gateway_transport,
-        call_transport=worker_transport,
-        tool_transport=worker_transport,
-    )
-    room_name = f"opx-out-{_safe_id(fields['call_id'])}"
-    participant_identity = f"pstn-{_safe_id(fields['call_id'])}"
-    dispatch = {
-        "schema": DISPATCH_SCHEMA,
-        **fields,
-        "participant_identity": participant_identity,
-    }
+    """Dial one call whose ORIGINATION the control plane has already approved.
+
+    ``admit`` is the one step that differs between the two originators: the
+    queue path claimed somebody else's job and mints its token from the call it
+    was handed, while a locally-originating deployment asks for admission and
+    the token together. Everything after it -- spending that token on media
+    admission, selecting the trunk that carries the caller ID, the room, the
+    explicit agent dispatch, the SIP participant, and the pre-media teardown
+    that releases a reservation -- is deliberately ONE body, so the two
+    originators cannot drift into two different dialers.
+
+    ``admit`` reports the admitted call id through ``observe_call_id`` as soon
+    as it knows one, so a failure between admission and the session is still
+    reported against the call that is holding the reservation.
+    """
+    fields: dict[str, str] = {}
+    trunk_name = ""
+    resolved_call_id = str(known_call_id or "")
     call: Any | None = None
     client: Any | None = None
+    room_name = ""
+    participant_identity = ""
     room_cleanup_required = False
     participant_cleanup_required = False
     may_have_originated = False
     stage = "outbound_authorization"
+
+    def observe_call_id(call_id: str) -> None:
+        nonlocal resolved_call_id
+        resolved_call_id = str(call_id or "") or resolved_call_id
 
     async def terminate_failure() -> None:
         async def remove_participant() -> None:
@@ -228,7 +257,7 @@ async def originate_job(
         await terminate_pre_media_call(
             call=call,
             adapter=adapter,
-            call_id=fields["call_id"],
+            call_id=resolved_call_id,
             reason={
                 "outbound_authorization": "outbound_authorization_rejected",
                 "outbound_media_admission": "outbound_media_admission_rejected",
@@ -242,14 +271,15 @@ async def originate_job(
         )
 
     try:
-        call = await asyncio.to_thread(
-            adapter.prepare_outbound,
-            call_id=fields["call_id"],
-            agent_id=fields["agent_id"],
-            from_number_id=fields["from_number_id"],
-            to_e164=fields["to_e164"],
-            metadata=auth_metadata,
-        )
+        fields, trunk_name, call = await asyncio.to_thread(admit, observe_call_id)
+        resolved_call_id = fields["call_id"]
+        room_name = f"opx-out-{_safe_id(resolved_call_id)}"
+        participant_identity = f"pstn-{_safe_id(resolved_call_id)}"
+        dispatch = {
+            "schema": DISPATCH_SCHEMA,
+            **fields,
+            "participant_identity": participant_identity,
+        }
         # Once this starts, a failure may race real SIP origination. The
         # worker must settle the one claim terminally rather than redial.
         stage = "outbound_media_admission"
@@ -271,7 +301,7 @@ async def originate_job(
             api_module,
             settings,
             fields["from_e164"],
-            trunk_name=str(payload.get("outbound_trunk_name") or ""),
+            trunk_name=trunk_name,
         )
         # Set before the RPC: a timeout can occur after LiveKit created it.
         room_cleanup_required = True
@@ -347,6 +377,101 @@ async def originate_job(
                 # A close failure must not hide the canonical SIP failure or
                 # change the worker's retry decision.
                 pass
+
+
+async def originate_job(
+    settings: OutboundWorkerSettings,
+    job: dict[str, Any],
+    *,
+    api_module: Any | None = None,
+) -> dict[str, Any]:
+    """Dial a call the control plane admitted for somebody else to place."""
+
+    fields = _validate_job(settings, job)
+    gateway_transport, worker_transport = _transports(settings)
+    payload = job["payload"]
+    auth_metadata = payload.get("authorization_metadata")
+    if not isinstance(auth_metadata, dict):
+        auth_metadata = {"channel": "voice"}
+    adapter = Gate2ControlPlaneAdapter(
+        gateway_id=settings.gateway_id,
+        transport=gateway_transport,
+        call_transport=worker_transport,
+        tool_transport=worker_transport,
+    )
+
+    def admit(_observe_call_id: Any) -> tuple[dict[str, str], str, Any]:
+        session = adapter.prepare_outbound(
+            call_id=fields["call_id"],
+            agent_id=fields["agent_id"],
+            from_number_id=fields["from_number_id"],
+            to_e164=fields["to_e164"],
+            metadata=auth_metadata,
+        )
+        # Per-number trunk dispatch, read fresh from the job payload on every
+        # attempt, so a retry dials the same BYO trunk the control plane
+        # resolved for this number - never the env default by accident.
+        return fields, str(payload.get("outbound_trunk_name") or ""), session
+
+    return await _originate_admitted_call(
+        settings,
+        adapter,
+        admit,
+        known_call_id=fields["call_id"],
+        api_module=api_module,
+    )
+
+
+async def originate_local_call(
+    settings: OutboundWorkerSettings,
+    *,
+    to_e164: str,
+    from_number_id: str = "",
+    from_phone_number: str = "",
+    request: dict[str, Any] | None = None,
+    api_module: Any | None = None,
+) -> dict[str, Any]:
+    """Place a call this deployment asked for, with only its own credential.
+
+    The queue is not involved and neither is an organization-scoped key: the
+    control plane admits the call against this deployment's token, applies the
+    same policy decision and wallet reserve a remote request gets, and returns
+    the single-use token that admits its media.
+    """
+
+    if not settings.execute:
+        raise OutboundWorkerError(
+            "outbound execution is disabled; set OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND=1 to place calls"
+        )
+    adapter = Gate2ControlPlaneAdapter(
+        gateway_id=settings.gateway_id,
+        transport=_gateway_transport(settings),
+    )
+
+    def admit(observe_call_id: Any) -> tuple[dict[str, str], str, Any]:
+        dial_plan, token = adapter.admit_local_outbound(
+            to_e164=to_e164,
+            from_number_id=from_number_id,
+            from_phone_number=from_phone_number,
+            request=request,
+        )
+        # Reported before the config fetch below: from here on the call exists
+        # and holds a reservation, so a later failure must be attributable.
+        observe_call_id(dial_plan["call_id"])
+        session = adapter.session_for_local_outbound(dial_plan, token)
+        return (
+            {
+                "call_id": dial_plan["call_id"],
+                "agent_id": dial_plan["agent_id"],
+                "from_number_id": dial_plan["number_id"],
+                "from_e164": dial_plan["from_phone_number"],
+                "to_e164": dial_plan["to_phone_number"],
+            },
+            dial_plan.get("outbound_trunk_name", ""),
+            session,
+        )
+
+    return await _originate_admitted_call(settings, adapter, admit, api_module=api_module)
 
 
 def _job_error_code(exc: BaseException) -> str:
@@ -452,18 +577,108 @@ class OutboundWorker:
             await asyncio.sleep(self.settings.poll_seconds)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="OpenPhonex LiveKit outbound originate worker")
-    parser.add_argument("--once", action="store_true", help="poll once and exit")
-    parser.add_argument("--watch", action="store_true", help="poll continuously")
-    parser.add_argument("--status", action="store_true", help="show a redacted queue preview and exit")
+def _default_caller_number(environ: Mapping[str, str]) -> str:
+    """The first DID this deployment serves, used when none is named.
+
+    A single-DID box answers and dials on the same number, and that number is
+    already configured once. Taking the first entry keeps `originate --to ...`
+    a complete command there, while a box with several numbers names the one
+    it wants.
+    """
+    configured = str(environ.get("SCH236_TEST_DID_E164") or "").strip()
+    return configured.split(",")[0].strip() if configured else ""
+
+
+def _originate_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="outbound_worker.py originate",
+        description="Place one outbound call from this deployment, without the job queue",
+    )
+    parser.add_argument("--to", required=True, help="destination in E.164, e.g. +37255501234")
+    parser.add_argument(
+        "--from",
+        dest="from_phone_number",
+        default="",
+        help="caller id in E.164; defaults to the first number in SCH236_TEST_DID_E164",
+    )
+    parser.add_argument(
+        "--from-number-id", default="", help="caller id by control-plane number id, instead of --from"
+    )
+    parser.add_argument("--agent-id", default="", help="agent to speak; defaults to the number's own agent")
+    # Required, not defaulted: outbound authorization is a declaration about
+    # WHY this call is being placed, and inventing one here would put a
+    # compliance claim in the record that nobody actually made. A call without
+    # them is refused by policy anyway -- better to say so before dialling.
+    parser.add_argument("--purpose", required=True, help="declared call purpose, evaluated by policy")
+    parser.add_argument("--reason", required=True, help="why this call was asked for")
+    parser.add_argument("--recipient-type", default="", help="declared recipient type, evaluated by policy")
+    parser.add_argument("--relationship", default="", help="declared relationship, evaluated by policy")
+    parser.add_argument("--authorized-by", default="", help="who asked for this call")
+    parser.add_argument("--idempotency-key", default="", help="retry this exact request safely")
     args = parser.parse_args(argv)
+
+    if not args.to.startswith("+"):
+        raise OutboundWorkerError("--to must be an E.164 number starting with +")
+    from_phone_number = args.from_phone_number.strip() or (
+        "" if args.from_number_id else _default_caller_number(os.environ)
+    )
+    if from_phone_number and not from_phone_number.startswith("+"):
+        raise OutboundWorkerError("--from must be an E.164 number starting with +")
+    if not from_phone_number and not args.from_number_id:
+        raise OutboundWorkerError(
+            "no caller id: pass --from in E.164, or set SCH236_TEST_DID_E164"
+        )
+    request: dict[str, Any] = {}
+    for key, value in (
+        ("agent_id", args.agent_id),
+        ("purpose", args.purpose),
+        ("recipient_type", args.recipient_type),
+        ("relationship", args.relationship),
+        ("idempotency_key", args.idempotency_key),
+    ):
+        if value:
+            request[key] = value
+    request["user_authorization"] = {
+        "authorized_by": args.authorized_by or "self_hosted_gateway",
+        "reason": args.reason,
+    }
+    settings = OutboundWorkerSettings.from_environ(os.environ)
+    result = asyncio.run(
+        originate_local_call(
+            settings,
+            to_e164=args.to,
+            from_number_id=args.from_number_id,
+            from_phone_number=from_phone_number,
+            request=request,
+        )
+    )
+    print("OPENPHONEX_OUTBOUND " + json.dumps(result, sort_keys=True), flush=True)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
     try:
+        if arguments and arguments[0] == "originate":
+            # A one-shot originator, not a second long-running service: it
+            # opens no port, so nothing on this host can be talked into
+            # dialling. `docker compose run` does NOT apply profiles, so the
+            # execution gate this path enforces itself
+            # (OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND) is the one that gates it;
+            # `--profile outbound` still gates the queue watcher.
+            return _originate_main(arguments[1:])
+        parser = argparse.ArgumentParser(description="OpenPhonex LiveKit outbound originate worker")
+        parser.add_argument("--once", action="store_true", help="poll once and exit")
+        parser.add_argument("--watch", action="store_true", help="poll continuously")
+        parser.add_argument("--status", action="store_true", help="show a redacted queue preview and exit")
+        args = parser.parse_args(arguments)
         worker = OutboundWorker(OutboundWorkerSettings.from_environ(os.environ))
         if args.status:
             print(json.dumps(worker.preview(), sort_keys=True))
             return 0
         return asyncio.run(worker.run(watch=args.watch and not args.once))
+    except SystemExit:
+        raise
     except BaseException as exc:
         print(
             "OPENPHONEX_OUTBOUND_FAILED "

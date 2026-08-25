@@ -45,7 +45,7 @@ whose compose file is not tracked in this repository.
 | `redis` | `8.8.0-alpine` (digest-pinned) |
 | `livekit-agents` + Deepgram/Google/ElevenLabs/Soniox/Fish Audio/Silero/turn-detector plugins | `1.6.6` (pip-pinned in `livekit_agent/agent/requirements.txt`) |
 | Voice pipeline (default) | Deepgram nova-3 → Gemini → ElevenLabs (resolved per call from realtime-config) |
-| Voice pipeline (si-LK / Sinhala) | Google Chirp 2 → Gemini → Gemini-TTS — see [Language stacks: Sinhala (si-LK)](#language-stacks-sinhala-si-lk) below |
+| Voice pipeline (si-LK / Sinhala) | Google command_and_search → Gemini → Gemini-TTS — see [Language stacks: Sinhala (si-LK)](#language-stacks-sinhala-si-lk) below |
 | Voice pipeline (ta-IN / Tamil) | Soniox → Gemini → Soniox or Fish Audio — see [Language stacks: Tamil (ta-IN)](#language-stacks-tamil-ta-in) below |
 
 ## Choosing your inbound topology
@@ -383,7 +383,7 @@ exchange.
 | 1 | A Linux host with Docker Engine + Compose v2, and **either** a public IP (static-endpoint topology) **or** the registration topology above. On a Mac, see [Running on macOS](#running-on-macos) — Docker Desktop cannot run this stack | any cloud VM (2 vCPU / 4 GB is plenty to start); a NAT'd box at home/office works with `--profile registrar` |
 | 2 | A **SIP trunk + DID** (phone number) | your carrier (production uses DIDWW; any carrier that sends SIP/RTP to your host works). Note BOTH the carrier's **signaling IP ranges** and its **RTP / media IP ranges** from its portal — they are often different range sets |
 | 3 | An **OpenPhonex control plane** you can reach | OpenPhonex Cloud (`https://api.openphonex.com`) or your own deployment |
-| 4 | From that control plane: an **organization id**, a registered **gateway deployment id**, two **different** credentials (`tgw_` for that gateway and `tai_` for its worker), and an **agent + phone-number route** configured for your DID | **API Keys → Gateway Tokens** creates the `tgw_`; the separate regular **API Keys** card creates the `tai_` worker key (both are shown once) |
+| 4 | From that control plane: an **organization id**, a registered **gateway deployment id**, **one** runtime credential (the `tgw_` gateway token), and an **agent + phone-number route** configured for your DID | **API Keys → Gateway Tokens** creates the `tgw_` (shown once). An inbound-answering stack needs no second, organization-scoped key |
 | 5 | Provider keys: `DEEPGRAM_API_KEY`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY` | console.deepgram.com / aistudio.google.com / elevenlabs.io |
 | 5b | *(only for si-LK / Sinhala agents)* a GCP service account for Cloud Speech-to-Text v2 | see [Language stacks: Sinhala (si-LK)](#language-stacks-sinhala-si-lk) below |
 | 5c | *(only for ta-IN / Tamil agents)* `SONIOX_API_KEY`, and `FISH_AUDIO_API_KEY` if the agent speaks with a Fish Audio voice | see [Language stacks: Tamil (ta-IN)](#language-stacks-tamil-ta-in) below |
@@ -412,7 +412,79 @@ With `--profile registrar` that is all you need: **no public IP, no static IP,
 and no port-forwards on your router.** The sidecar's outbound REGISTER is what
 makes the VM reachable, and the router's NAT stays in front of it.
 
-## 1. Configure (four files)
+## 1. Configure
+
+### The short way: `selfhost-bootstrap.sh` (you set two values)
+
+Run this **before** `docker compose up`. You provide the control-plane URL and
+one organization API key carrying `gateways:write`; it derives and writes
+everything else.
+
+```bash
+cd packages/openphonex-gateway/deploy
+OPENPHONEX_CONTROL_PLANE_URL=https://api.openphonex.com \
+OPENPHONEX_BOOTSTRAP_API_KEY=tai_... \
+  bash selfhost-bootstrap.sh
+```
+
+Omit `OPENPHONEX_BOOTSTRAP_API_KEY` and it is read from the terminal without
+echo. Either way **it is never written to this box** — there is nothing to
+delete afterwards, so "revoke it when you are done" is one step in the
+dashboard and nothing else. The script says so when it finishes.
+
+What it derives: `OPENPHONEX_ORGANIZATION_ID` (from the key's own workspace),
+`OPENPHONEX_GATEWAY_ID` (it registers the deployment), the deployment-bound
+`OPENPHONEX_GATEWAY_API_TOKEN` (minted with **no expiry** — an expiry without
+auto-rotation only manufactures a lockout), `SCH236_TEST_DID_E164`, and the
+`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` pair, instantiating `livekit.yaml` and
+`sip.yaml` from their templates so the one pair is identical in all three
+files. It writes `gateway-state.json` (chmod 600) beside `.env.livekit`:
+identity only, never the token secret, and no container reads it.
+
+What it deliberately does **not** derive:
+
+- `DIDWW_INBOUND_ADDRESSES`. The control plane holds no carrier signalling
+  ranges and cannot know them for a carrier you brought yourself. A wrong
+  allowlist is the everything-green-but-never-rings failure this runbook fights
+  hardest, so read them off your carrier's portal and set them by hand.
+- your provider API keys, which depend on the voice stack your agent publishes.
+
+It is safe to re-run and it never guesses:
+
+- A value already set in `.env.livekit` is left alone; a value missing from the
+  file but present in `gateway-state.json` is filled from there; only a value
+  in neither is derived.
+- An existing `livekit.yaml` is **read, never rewritten** — the pair is taken
+  out of it and the env is synced to match.
+- Exactly one agent-routed active number is used. Zero stops the run and tells
+  you to point a number at a published agent; more than one lists the
+  candidates and requires you to set `SCH236_TEST_DID_E164` yourself, because
+  provisioning builds one trunk and picking the wrong number leaves you with a
+  stack that looks perfect and never rings.
+- A gateway token already in the file is **probed** before anything is minted,
+  so a casual re-run does not leave a live orphaned credential behind. When one
+  is replaced, the old token id from `gateway-state.json` is revoked.
+
+Already running a self-hosted gateway? Run it anyway: a fully filled-in
+`.env.livekit` with no state file is adopted (`Adopted existing deployment
+gw_…; nothing changed`) and you gain only the state file.
+
+Against a control plane older than the one that defaults the workspace from your
+key, registration fails with a shaped error telling you to re-run with
+`OPENPHONEX_ORGANIZATION_ID=org_...` in the environment, the same way you pass
+the URL. Supplying it when `.env.livekit` already names a different organization
+is refused rather than silently preferred: the script never overwrites a value
+you set, so the two would end up disagreeing.
+
+If `gateway-state.json` and `.env.livekit` are both lost, the script registers
+a **new** deployment. That is safe — routing is by DID, not by deployment — but
+it leaves a stale gateway row; retire it from **Settings → Gateway**.
+
+Then set the two hand values above, `mkdir -p sessions call-evidence`, and
+`sudo chown -R 10001:10001 sessions call-evidence` (the agent drops to uid
+10001 before writing them, so a root-owned directory EACCESes the first call).
+
+### The long way: fill four files by hand
 
 ```bash
 cd packages/openphonex-gateway/deploy
@@ -429,11 +501,10 @@ sudo chown -R 10001:10001 sessions call-evidence
 
 Then fill them in:
 
-### Create the two control-plane credentials — separately
+### Create the control-plane credential
 
 Open your workspace's **API Keys** page after registering the gateway
-deployment. These are different credentials with deliberately different trust
-boundaries; do not substitute one for the other.
+deployment. (`selfhost-bootstrap.sh` does this step for you.)
 
 1. In the **Gateway Tokens** card, select the registered deployment and create
    its gateway token. It is a deployment-bound `tgw_` credential. The one-time
@@ -445,27 +516,29 @@ boundaries; do not substitute one for the other.
    OPENPHONEX_GATEWAY_API_TOKEN=tgw_...
    ```
 
-   In the smoke test, the `tgw_` token is validated through that exact
-   gateway's non-mutating number-rules read. It cannot authenticate the
-   organization worker.
-2. In the separate regular **API Keys** card, click **Create self-host worker
-   key**. That creates the organization-scoped `tai_` key for
-   `OPENPHONEX_WORKER_API_TOKEN`, with the required fixed baseline:
-   `calls:read` + `calls:write` for inbound routing and its immediate
-   call-bound runtime-config read. Copy its one-time value into:
+   In the smoke test, the `tgw_` token is validated on both surfaces a call
+   uses it for: that exact gateway's non-mutating number-rules read, and the
+   MCP tool-schema catalogue.
 
-   ```dotenv
-   OPENPHONEX_WORKER_API_TOKEN=tai_...
-   ```
+That is the only runtime credential an inbound-answering stack needs. The
+gateway token performs the inbound route, reads the resulting call's runtime
+config, and lists MCP tool schemas — each of them bound server-side to the one
+organization the token's deployment belongs to. There is deliberately no
+second, organization-scoped key on the box: if this host is compromised, what
+an attacker holds reaches this deployment's workspace and stops there.
 
-Both plaintext values are revealed only at creation time and do not appear in
-the API-key or gateway-token lists. Revoke and replace a lost or exposed token;
-there is no later reveal.
+The plaintext value is revealed only at creation time and does not appear in
+the gateway-token list. Revoke and replace a lost or exposed token; there is no
+later reveal.
 
-Set `OPENPHONEX_ORGANIZATION_ID` to the same workspace that minted the `tai_`
-key and owns the DID. A worker key from another workspace cannot route this
-deployment's calls: the control plane rejects the tenant mismatch before it
-returns a runtime configuration.
+Set `OPENPHONEX_ORGANIZATION_ID` to the workspace that registered this gateway
+and owns the DID. The control plane compares it with the token's own
+organization and rejects a mismatch before it returns a runtime configuration.
+
+*(Upgrading an existing install: an `OPENPHONEX_WORKER_API_TOKEN` already in
+`.env.livekit` keeps working exactly as before — the worker prefers it when it
+is set. Deleting the line is what actually shrinks the blast radius, and
+nothing about inbound calling needs it any more.)*
 
 1. **Generate one LiveKit key pair** (you invent it; nobody issues it):
    `openssl rand -hex 32` for the secret, any short id (e.g. `opx-selfhost`)
@@ -521,17 +594,89 @@ field states the exact reason — see [Troubleshooting](#troubleshooting-livekit
 
 ### Outbound calling
 
-The `outbound-worker` compose profile claims only policy-approved
-`call.outbound_originate` jobs. It consumes the call's short-lived,
-destination-bound authorization before dialing and explicitly dispatches the
-production agent into the LiveKit room. Per-call instructions, opening line,
-and language are fetched from OpenPhonex by call ID; they are never trusted
-from SIP or room metadata.
+There are two ways this deployment's outbound calls get dialed. Which one you
+are on is a property of the deployment itself, `outbound_execution_mode`:
 
-The guided self-host worker key is intentionally **inbound-only**: it excludes
-the global `worker_jobs:*` authority, so do not start this optional profile
-with that baseline credential. Keep `OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND=0`
-unless OpenPhonex has issued a separately reviewed outbound-worker credential.
+```bash
+curl -sS -H "Authorization: Bearer $OPENPHONEX_GATEWAY_API_TOKEN" \
+  "$OPENPHONEX_CONTROL_PLANE_URL/v1/gateway-deployments/$OPENPHONEX_GATEWAY_ID"
+```
+
+Either way, per-call instructions, opening line, and language are fetched from
+OpenPhonex by call ID; they are never trusted from SIP or room metadata. And
+either way the box cannot reach media without the short-lived,
+destination-bound single-use authorization OpenPhonex mints **after** its own
+outbound policy decision, caps, kill switches and wallet reserve have passed.
+
+#### `local` — this box originates its own calls
+
+The requester and the dialer are the same machine, so the queue is not
+involved and neither is an organization-scoped key. This box asks OpenPhonex to
+admit the call it is about to place; OpenPhonex runs the identical admission a
+remote `POST /v1/calls` gets and answers with the admitted call plus its
+single-use token, which the box then spends to dial.
+
+Set the mode once (workspace owner, `gateways:write`):
+
+```bash
+curl -sS -X PATCH \
+  -H "Authorization: Bearer <tai_ key with gateways:write>" \
+  -H "Content-Type: application/json" \
+  -d '{"outbound_execution_mode": "local"}' \
+  "$OPENPHONEX_CONTROL_PLANE_URL/v1/gateway-deployments/$OPENPHONEX_GATEWAY_ID/outbound-execution-mode"
+```
+
+The switch refuses in either direction while calls are still in flight:
+going `local` while outbound jobs are still waiting for the queue would
+strand them, and going back to `queue` while this box is still dialing would
+abandon those calls. The error says how many, and retrying once they land
+succeeds.
+
+Set `OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND=1` in `.env.livekit`, then dial:
+
+```bash
+docker compose -f docker-compose.livekit.yml run --rm outbound-worker \
+  python /app/outbound_worker.py originate \
+    --to +15551234567 --purpose appointment --reason "confirm tomorrow's booking"
+```
+
+`--from` defaults to the first number in `SCH236_TEST_DID_E164`; the agent
+defaults to that number's own configured agent. `--purpose` and `--reason` are
+**required**: the outbound authorization OpenPhonex runs is a decision about a
+stated purpose, and this command will not invent one for you. It prints one
+`OPENPHONEX_OUTBOUND {...}` line with the call id, or
+`OPENPHONEX_OUTBOUND_FAILED {...}` with the reason.
+
+Two things about the gates here. `docker compose run` **ignores compose
+profiles** — verify that yourself if you doubt it — so `--profile outbound` is
+not what gates this command; `OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND` is, and the
+command refuses while it is `0`. The profile still gates the long-running
+queue-claiming worker below, which is a service and does honour it.
+
+Once the deployment is in `local` mode, a remote `POST /v1/calls` for one of
+this workspace's numbers is **refused**, with a message naming the command
+above. That is the point: this box no longer polls the job queue, so a queued
+call would reserve money against a call that would never ring. The refusal
+happens before the wallet reserve, so nothing is held. (A workspace that still runs a
+queue-mode deployment anywhere keeps remote origination for every project —
+job claims are per-organization, not per-project, so that box is still a
+claimer. The refusal only applies once no queue-mode gateway is left.)
+
+#### `queue` — the default, and every deployment created before this
+
+Outbound calls are requested from OpenPhonex with an organization-scoped API
+key (`POST /v1/calls`), and the `--profile outbound` worker on this box claims
+and dials them.
+
+This mode is the **one** thing on the box that needs an organization-scoped
+`tai_` key in `OPENPHONEX_WORKER_API_TOKEN`: claiming a
+`call.outbound_originate` job somebody else requested is `worker_jobs:*`
+authority over the whole workspace's queue, which a deployment-bound gateway
+token deliberately does not carry and should not be given. Keep
+`OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND=0`, and the variable blank, unless you
+mean to take that blast radius back on purpose. An inbound-only stack never
+sets it, and switching to `local` and deleting the line is what narrows a box
+that already has it.
 
 ## 4. Verify — run the smoke test
 
@@ -541,19 +686,22 @@ bash selfhost-smoketest.sh
 
 It prints a `[PASS]`/`[FAIL]` line per check (services up, redis, LiveKit,
 **agent registered**, the deployment-bound **gateway `tgw_` token accepted**
-by the non-mutating number-rules read, the organization-scoped **worker `tai_`
-key authenticates** through MCP `tools/list`, artifact dirs writable) and ends
-with `RESULT: PASS` when the stack is up and both credentials authenticate.
-Every `[FAIL]` line includes the exact command or fix to apply.
+on both surfaces a call needs it for — the non-mutating number-rules read and
+the MCP `tools/list` schema catalogue — artifact dirs writable) and ends with
+`RESULT: PASS` when the stack is up and its credential authenticates on both.
+If an install still sets `OPENPHONEX_WORKER_API_TOKEN`, that key is checked
+too, because the legacy `queue` outbound mode still reads it. Every `[FAIL]` line
+includes the exact command or fix to apply.
 
-`RESULT: PASS` is necessary but **not sufficient** for a call to succeed: the
-worker-token check only proves it *authenticates* (MCP `tools/list`), not that
-it carries the `calls:read` + `calls:write` routing/config scopes. Because
-`tools/list` has no target DID, it also cannot establish that the `tai_` key
-belongs to the configured `OPENPHONEX_ORGANIZATION_ID`; the inbound route
-checks that tenant binding before it resolves the DID. The smoke test does not
-verify that your DID's number route + agent are configured in the control
-plane. The first real call in step 5 is the end-to-end confirmation.
+`RESULT: PASS` is necessary but **not sufficient** for a call to succeed:
+these checks prove the token *authenticates*, not that it may perform the
+inbound route. Because `tools/list` has no target DID — it returns the static
+tool catalogue and reads no workspace row, which is exactly why a
+deployment-bound token is allowed to call it — it cannot establish anything
+about your DID either. The inbound route checks the tenant binding when it
+resolves the DID. The smoke test does not verify that your DID's number route +
+agent are configured in the control plane. The first real call in step 5 is the
+end-to-end confirmation.
 
 Manual spot-check, if you prefer:
 
@@ -583,26 +731,47 @@ state lives in `sessions/`.
 
 ## Security notes
 
-- **Worker token is organization-scoped** (`OPENPHONEX_WORKER_API_TOKEN`,
-  prefix `tai_`). It comes from the regular **API Keys** card, not **Gateway
-  Tokens**. The self-host worker preset includes only `calls:read` +
-  `calls:write`, so it can route inbound calls and read their call-bound
-  runtime configuration. The self-host compose explicitly disables its
-  non-critical global worker-heartbeat loop; it does not grant `worker_jobs:*`
-  or enable the optional outbound profile.
-  This mirrors production: inbound routing and MCP `tools/list` schema
-  discovery are org operations. Model tool calls use a call-bound endpoint, but
-  whoever holds this token can still run the worker for the whole organization.
-  Treat the box accordingly: `chmod 600 .env.livekit`, no shared shell access,
-  and **rotate the token immediately** if the host is ever suspected
-  compromised. (Narrowing this to per-call tokens is a planned control-plane
-  change; the gateway `tgw_` token is already narrowly scoped.) See the
-  repo-root `SECURITY.md`.
-- **Gateway tokens are deployment-scoped** (`OPENPHONEX_GATEWAY_API_TOKEN`,
-  prefix `tgw_`). Create them only from **API Keys → Gateway Tokens** after
-  registering the deployment, and use one only with its matching gateway id.
-  A valid token for another deployment or organization is rejected; it is not
-  a worker credential.
+- **One runtime credential, and it is deployment-scoped**
+  (`OPENPHONEX_GATEWAY_API_TOKEN`, prefix `tgw_`). Create it only from **API
+  Keys → Gateway Tokens** after registering the deployment, and use it only
+  with its matching gateway id. A valid token for another deployment or
+  organization is rejected.
+
+  Inbound routing, the call's runtime-config read, and MCP `tools/list` schema
+  discovery all run on this token now — they used to need a second,
+  organization-scoped `tai_` worker key, and that is what made a compromised
+  box an organization-wide problem. Each of them derives its organization from
+  the token row **server-side**: nothing this host sends can name a workspace.
+  Two further limits keep the surface honest — `tools/list` is the only MCP
+  method a gateway token may call (it returns the static tool catalogue and
+  reads no workspace row; every other method, `tools/call` included, stays
+  refused), and the per-token `call.inbound_route` allowlist entry can be
+  removed to stop a deployment answering at all. So a compromise of this box
+  reaches this deployment's workspace and stops there.
+
+  The compose file also pins `OPENPHONEX_WORKER_HEARTBEAT_ENABLED=0`, so the
+  non-critical global worker-heartbeat loop stays off — it is the one caller
+  that wanted organization-wide `worker_jobs:*` authority for something no call
+  depends on.
+
+  Treat the file accordingly all the same: `chmod 600 .env.livekit`, no shared
+  shell access, and **rotate the token immediately** if the host is ever
+  suspected compromised. See the repo-root `SECURITY.md`.
+  Outbound origination runs on this same token once the deployment is in
+  `local` mode: the box asks for admission
+  (`POST /v1/gateway-deployments/{id}/outbound-calls`) and dials with the
+  single-use token that returns. The organization is still read from the token
+  row, the policy decision and wallet reserve still happen server-side first,
+  and the token is bound to one (gateway, organization, from-number,
+  to-number, call).
+- **The legacy `queue` outbound mode is the exception.** `--profile outbound`
+  reads an organization-scoped `tai_` key from `OPENPHONEX_WORKER_API_TOKEN`,
+  because claiming a call job somebody else requested is `worker_jobs:*`
+  authority over the whole workspace queue. An inbound-only or `local`-mode
+  stack leaves it blank; an install that sets it takes back the wider blast
+  radius knowingly. An existing `tai_` key already in `.env.livekit` also keeps
+  working (the worker prefers it when set) — switching to `local` and deleting
+  the line is what actually narrows the box.
 - **Transport is enforced, not just advised**: the agent refuses plaintext
   http to non-loopback control planes and refuses cross-origin redirects, so
   the bearer tokens cannot be tricked onto another host.
@@ -615,14 +784,16 @@ state lives in `sessions/`.
 The agent joins the room **unsubscribed** and admits no caller audio until
 the control plane authorizes the call:
 
-1. `POST /v1/calls/inbound/route` (worker token) — resolves the **called DID**
+1. `POST /v1/calls/inbound/route` (gateway token) — resolves the **called DID**
    to the authoritative agent and creates the call, returning the
-   organization/project binding that owns that number. Endpoint-routed calls
-   resolve tools the same way.
-2. `GET /v1/calls/{call_id}/realtime-config` (worker token) — the resolved
+   organization/project binding that owns that number. The organization it
+   routes in comes from the token row, never from the request body, so this
+   deployment can only ever route its own workspace's numbers. Endpoint-routed
+   calls resolve tools the same way.
+2. `GET /v1/calls/{call_id}/realtime-config` (gateway token) — the resolved
    semantic config: system prompt, first message, language, transcriber/model/
    voice provider selection (Deepgram/Gemini/ElevenLabs by default, or Google
-   Chirp 2/Gemini/Gemini-TTS for `language: si`), and the tool allowlist. The
+   command_and_search/Gemini/Gemini-TTS for `language: si`), and the tool allowlist. The
    agent validates it — including that its organization and project match the
    ones the called number resolved to — and only then subscribes to media.
 3. Tools: the agent fetches schemas via MCP `tools/list` on `POST /mcp`,
@@ -651,7 +822,7 @@ configured with `language: si` instead resolves to:
 
 | Component | Provider | Notes |
 |---|---|---|
-| STT (transcriber) | Google Cloud Speech-to-Text v2, **Chirp 2** | `asia-southeast1` recognizer location — empirically verified against the live API for si-LK. Chirp 3 rejects si-LK with an HTTP 400 in both `eu` and `us`; Chirp 2 in `asia-southeast1` transcribed a Sinhala test phrase correctly at 0.89 confidence, and `asia-southeast1` is also geographically closer to Sri Lanka than `eu` |
+| STT (transcriber) | Google Cloud Speech-to-Text v1, **command_and_search** | Google's maintained matrix lists streaming support for si-LK; the production credential has also completed a streaming request. Chirp 2 can transcribe Sinhala synchronously but does not support Sinhala streaming. |
 | LLM (model) | Gemini | same model catalog as every other language — Gemini handles Sinhala natively, no separate credential |
 | TTS (voice) | **Gemini-TTS** (`livekit.plugins.google.beta.GeminiTTS`) | same `GEMINI_API_KEY` as the LLM above; non-streaming (chunked HTTP synthesis, not a realtime websocket) |
 
@@ -659,9 +830,9 @@ The catalog rejects any other combination for `si` up front — picking
 Deepgram or ElevenLabs for a Sinhala agent fails validation at config-save
 time with a clear error, not silently at call time.
 
-### 1. GCP service account (Chirp 2 credentials)
+### 1. GCP service account (Cloud Speech credentials)
 
-Chirp 2 is a Cloud Speech-to-Text **v2** API call authenticated with a real
+Cloud Speech-to-Text is authenticated with a real
 GCP service account — this is **not** the `GEMINI_API_KEY` above (that's a
 Gemini API key, a completely different Google product surface).
 
@@ -687,7 +858,7 @@ Gemini API key, a completely different Google product surface).
 ```
 GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-speech-sa.json   # OR:
 GOOGLE_APPLICATION_CREDENTIALS_JSON='{"type":"service_account",...}'
-GOOGLE_STT_LOCATION=asia-southeast1   # optional; asia-southeast1 is the default and the empirically verified si-LK region (Chirp 3 rejects si-LK with an HTTP 400 in eu/us)
+GOOGLE_STT_LOCATION=asia-southeast1   # optional; used by v2 Chirp 2 only; si-LK command_and_search uses the v1 global endpoint
 ```
 
 `GEMINI_API_KEY` (already required by the default pipeline) covers both the
@@ -703,7 +874,7 @@ this deploy has the credentials above — or via the API/MCP `set_agent_voice_st
 ```json
 {
   "language": "si",
-  "transcriber": {"provider": "google", "model": "chirp_2"},
+  "transcriber": {"provider": "google", "model": "command_and_search"},
   "model": {"provider": "gemini", "model": "gemini-3.5-flash-lite"},
   "voice": {"provider": "gemini", "model": "gemini-2.5-flash-preview-tts", "voice_id": "Kore"}
 }
@@ -731,11 +902,9 @@ a short recorded Sinhala sample offline first. Once you have a short si-LK WAV
 sample (a native speaker saying a few sentences), a founder-run validation
 looks like:
 
-**Empirically confirmed against the live Google Speech-to-Text v2 API:**
-`chirp_2` + `asia-southeast1` transcribes si-LK correctly (0.89 confidence on
-a Gemini-TTS-synthesized Sinhala test phrase); `chirp_3` rejects si-LK with an
-HTTP 400 in both `eu` and `us`. Use the `chirp_2`/`asia-southeast1` pairing
-below, not `chirp_3`.
+**Confirmed against the live Google Speech-to-Text v1 streaming API:**
+`command_and_search` accepts si-LK streaming audio. Do not substitute Chirp 2:
+Google does not list Sinhala among Chirp 2's streaming languages.
 
 ```python
 # validate_sinhala_stack.py — run with: python3 validate_sinhala_stack.py sample.wav
@@ -743,8 +912,8 @@ import sys
 from livekit.plugins import google
 from livekit.plugins.google.beta import GeminiTTS
 
-stt = google.STT(model="chirp_2", languages="si-LK", location="asia-southeast1")   # picks up
-                                                                                     # GOOGLE_APPLICATION_CREDENTIALS
+stt = google.STT(model="command_and_search", languages="si-LK")  # picks up
+                                                                    # GOOGLE_APPLICATION_CREDENTIALS
 tts = GeminiTTS(model="gemini-2.5-flash-preview-tts", voice_name="Kore")  # picks up GEMINI_API_KEY / GOOGLE_API_KEY
 
 # 1. STT: confirm a recorded si-LK sample transcribes to readable Sinhala text.
@@ -791,8 +960,8 @@ FISH_AUDIO_API_KEY=...      # only if the agent's voice is a Fish Audio voice
 `selfhost-smoketest.sh` reads the same manifest rather than a list of its own,
 so it accepts a Tamil-only install (no Deepgram, no ElevenLabs) and tells you
 which declared credentials are still unset. It cannot tell you which ones
-*your* agent needs — that would mean reading the agent, and the self-host
-worker key is deliberately scoped to `calls:read` + `calls:write`.
+*your* agent needs — that would mean reading the agent, and the gateway token
+is deliberately not an agent-configuration credential.
 
 ### Do not put a BYOK lease variable in `.env.livekit`
 
@@ -800,10 +969,15 @@ A workspace can bring its own provider key per component. When it does, the
 control plane leases that key for **one call** under a component-scoped name —
 `SONIOX_STT_API_KEY`, `SONIOX_TTS_API_KEY`, `FISH_AUDIO_TTS_API_KEY` — beside
 an `OPENPHONEX_BYOK_*` marker. The worker refuses a call that has one of those
-names without its marker, rather than quietly billing the account key, so a
-copy of one in `.env.livekit` takes that provider down completely and reports
-an invalid credential marker that names neither the file nor the variable. The
-account keys above are the only provider values this file holds.
+names without its marker, rather than quietly billing the account key.
+
+A copy of one in `.env.livekit` used to reach that check and take the provider
+down completely, reporting an invalid credential marker that named neither the
+file nor the variable. It cannot any more: `carrier-entrypoint.sh` unsets every
+lease name after it sources `.env.livekit`, so no service that runs the agent
+image ever starts with one, whether it came from the file or from the
+container's own environment. Leave them out regardless — the account keys above
+are the only provider values this file holds.
 
 ## Updating
 
@@ -837,11 +1011,11 @@ change — they are enforced equal by the release tests.
 - **Smoke test: `control plane accepts the gateway token` FAILS with 401/403:**
   the `tgw_` token is wrong, revoked, expired, from another organization, or
   does not match that gateway deployment id. Mint a fresh one from **API Keys
-  → Gateway Tokens** for that registered deployment. If the **worker** check
-  fails instead, create/replace its organization-scoped `tai_` key from the
-  separate regular **API Keys** card (**Create self-host worker key**); a
-  `tgw_` pasted where the worker key belongs is rejected (they are different
-  tokens).
+  → Gateway Tokens** for that registered deployment. If the **tool schemas**
+  check fails instead while number-rules passed, the control plane is older
+  than the one-credential release and still refuses a `tgw_` on `/mcp`: either
+  upgrade it, or set `OPENPHONEX_WORKER_API_TOKEN` to an organization-scoped
+  `tai_` key as before.
 - **Call rings but nobody answers:** the dispatch rule or number route is off.
   Check (a) provision succeeded (`SELFHOST_PROVISIONED`), (b) the control
   plane has a phone-number route + agent for the DID, (c)

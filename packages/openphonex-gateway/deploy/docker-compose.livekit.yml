@@ -146,10 +146,26 @@ services:
         condition: service_started
 
   outbound-worker:
-    # Claims policy-approved call.outbound_originate jobs, consumes the
-    # destination-bound single-use authorization, then dials through LiveKit
-    # SIP and explicitly dispatches the production agent. Profile-gated so an
-    # inbound-only deployment never starts an originator by accident.
+    # The outbound originator, in both of its shapes.
+    #
+    # As a SERVICE (`--profile outbound`, the `--watch` command below) it is the
+    # legacy queue originator: it claims policy-approved
+    # call.outbound_originate jobs an organization-scoped key requested, then
+    # dials. Profile-gated so an inbound-only deployment never starts it by
+    # accident.
+    #
+    # As a ONE-SHOT (`docker compose run --rm outbound-worker python
+    # /app/outbound_worker.py originate --to +... --purpose ... --reason ...`)
+    # it is the local originator for a deployment whose
+    # outbound_execution_mode is `local`: it asks the control plane to admit
+    # the call and dials it with the single-use token that returns, using only
+    # the deployment-bound gateway token. `docker compose run` does NOT apply
+    # profiles, so that path enforces OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND
+    # itself rather than relying on this line.
+    #
+    # Both shapes consume the destination-bound single-use authorization before
+    # any media, dial through LiveKit SIP, and explicitly dispatch the
+    # production agent.
     profiles: [outbound]
     image: openphonex-livekit-agent:selfhost
     pull_policy: never

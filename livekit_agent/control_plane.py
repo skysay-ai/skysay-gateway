@@ -286,6 +286,29 @@ class UrllibJsonTransport:
         return decoded
 
 
+def call_credential_token(environ: Mapping[str, str]) -> str:
+    """Bearer token for the worker's call-bound control-plane requests.
+
+    A deployment now needs ONE runtime credential. Its deployment-bound
+    gateway token performs inbound routing, reads the resulting call's
+    realtime config, and lists MCP tool schemas -- all bound server-side to
+    the organization that owns the deployment, so a compromised host reaches
+    that deployment's workspace and no wider surface.
+
+    An installation that still sets an organization-scoped worker key keeps
+    using it unchanged: this is additive, not a migration. The optional
+    outbound-dial profile still needs that separate key, because claiming
+    worker jobs is organization authority a gateway token does not carry.
+    """
+    worker_token = str(environ.get("OPENPHONEX_WORKER_API_TOKEN") or "").strip()
+    if worker_token:
+        return worker_token
+    gateway_token = str(environ.get("OPENPHONEX_GATEWAY_API_TOKEN") or "").strip()
+    if gateway_token:
+        return gateway_token
+    raise KeyError("OPENPHONEX_GATEWAY_API_TOKEN")
+
+
 @dataclass
 class Gate2CallSession:
     transport: JsonTransport
@@ -1032,7 +1055,30 @@ class Gate2ControlPlaneAdapter:
             )
         if authorization_call_id != call_id:
             raise ControlPlaneRejected("single-call authorization is not bound to the session call id")
+        return self._session_for_call_authorization(
+            call_id=call_id,
+            agent_id=agent_id,
+            from_number_id=from_number_id,
+            to_e164=to_e164,
+            token=token,
+        )
 
+    def _session_for_call_authorization(
+        self,
+        *,
+        call_id: str,
+        agent_id: str,
+        from_number_id: str,
+        to_e164: str,
+        token: str,
+    ) -> Gate2CallSession:
+        """Build the pre-media session an allowed single-call token unlocks.
+
+        Both ways of obtaining that token end here, so the media-admission
+        contract cannot drift between them: the config is fetched for the
+        agent the control plane named, and the token is spent by
+        ``admit_media`` against the destination it is bound to.
+        """
         config = self.transport.request("GET", f"/v1/agents/{agent_id}/realtime-config")
         _validate_realtime_config(config, expected_agent_id=agent_id)
         consuming_transport = UrllibJsonTransport(
@@ -1046,11 +1092,101 @@ class Gate2ControlPlaneAdapter:
             tool_transport=self.tool_transport,
             call_id=call_id,
             gateway_id=self.gateway_id,
-            authorization_call_id=authorization_call_id,
+            authorization_call_id=call_id,
             call_authorization_token=token,
             config=config,
             from_number_id=from_number_id,
             to_e164=to_e164,
+        )
+
+    def admit_local_outbound(
+        self,
+        *,
+        to_e164: str,
+        from_number_id: str = "",
+        from_phone_number: str = "",
+        request: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, str], str]:
+        """Ask the control plane to admit an outbound call this box will dial.
+
+        The queue path exists because the dialer did not request the call. On a
+        self-hosted box it did, so this asks for admission and origination
+        authority in ONE call: the control plane runs the same policy decision,
+        wallet reserve and call record it runs for a remote request, and
+        answers with the call plus the single-use token that admits its media.
+
+        Nothing about the workspace is sent: the organization and project are
+        read from this deployment's own token server-side. What IS sent back is
+        checked against what was asked for -- a dial plan naming another
+        destination or another caller ID is refused rather than dialled.
+
+        Returns the validated dial plan and the single-use token separately, so
+        the caller knows the admitted call id before it does anything that can
+        fail -- and can therefore report a pre-media failure for it.
+        """
+        if not from_number_id and not from_phone_number:
+            raise ControlPlaneRejected("an outbound call needs a caller id")
+        body = dict(request or {})
+        body["to"] = to_e164
+        if from_number_id:
+            body["from_number_id"] = from_number_id
+        if from_phone_number:
+            body["from_phone_number"] = from_phone_number
+        response = self.transport.request(
+            "POST",
+            f"/v1/gateway-deployments/{self.gateway_id}/outbound-calls",
+            body,
+        )
+        if response.get("authorized") is not True:
+            call = response.get("call") if isinstance(response.get("call"), dict) else {}
+            detail = ", ".join(
+                part
+                for part in (
+                    f"call {call.get('id')}" if call.get("id") else "",
+                    f"status {call.get('status')}" if call.get("status") else "",
+                )
+                if part
+            )
+            raise ControlPlaneRejected(
+                "outbound call admission did not authorize origination"
+                + (f" ({detail})" if detail else "")
+            )
+        authorization = response.get("authorization")
+        dial_plan = response.get("dial_plan")
+        if not isinstance(authorization, dict) or not isinstance(dial_plan, dict):
+            raise ControlPlaneRejected("authorized admission omitted its authorization or dial plan")
+        token = authorization.get("token")
+        fields = {
+            name: str(dial_plan.get(name) or "").strip()
+            for name in ("call_id", "agent_id", "number_id", "from_phone_number", "to_phone_number")
+        }
+        if not isinstance(token, str) or not token:
+            raise ControlPlaneRejected("authorized admission omitted its single-use token")
+        missing = [name for name, value in fields.items() if not value]
+        if missing:
+            raise ControlPlaneRejected(
+                "authorized admission omitted required dial-plan fields: " + ", ".join(missing)
+            )
+        if str(authorization.get("call_id") or "") != fields["call_id"]:
+            raise ControlPlaneRejected("single-call authorization is not bound to the admitted call")
+        if fields["to_phone_number"] != to_e164:
+            raise ControlPlaneRejected("admitted dial plan names a different destination")
+        if from_number_id and fields["number_id"] != from_number_id:
+            raise ControlPlaneRejected("admitted dial plan names a different caller id")
+        if from_phone_number and fields["from_phone_number"] != from_phone_number:
+            raise ControlPlaneRejected("admitted dial plan names a different caller id")
+        fields["outbound_trunk_name"] = str(dial_plan.get("outbound_trunk_name") or "").strip()
+        return fields, token
+
+    def session_for_local_outbound(self, dial_plan: dict[str, str], token: str) -> Gate2CallSession:
+        """Turn an admitted dial plan into the same pre-media session the queue path builds."""
+
+        return self._session_for_call_authorization(
+            call_id=dial_plan["call_id"],
+            agent_id=dial_plan["agent_id"],
+            from_number_id=dial_plan["number_id"],
+            to_e164=dial_plan["to_phone_number"],
+            token=token,
         )
 
     def prepare_workspace_browser_test(

@@ -22,12 +22,14 @@ from livekit.agents import (
     JobProcess,
     cli,
 )
+from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.agents.voice.room_io import RoomOptions
 from livekit.agents.metrics import ModelUsageCollector
 
 from control_plane import (
     Gate2ControlPlaneAdapter,
     UrllibJsonTransport,
+    call_credential_token,
     parse_outbound_dispatch,
     parse_workspace_browser_test_dispatch,
 )
@@ -59,6 +61,9 @@ from production import (
     SemanticTurnEventRecorder,
     WorkerLocalEndCall,
     PeriodicWorkerHeartbeat,
+    BROWSER_TEST_REPORT_BUDGET_SECONDS,
+    browser_test_close_component,
+    browser_test_error_metadata,
     build_livekit_model_tools,
     caller_disconnect_handler,
     cleanup_livekit_room,
@@ -68,7 +73,9 @@ from production import (
     inbound_sip_identity,
     post_livekit_worker_heartbeat,
     profile_from_realtime_config,
+    requires_gemini_tts_usage_metadata,
     requires_soniox_usage_correlation,
+    safe_component_error_diagnostics,
     service_heartbeat_environ,
     terminate_pre_media_call,
     worker_heartbeats_enabled,
@@ -141,14 +148,23 @@ def _transport(token_variable: str) -> UrllibJsonTransport:
     )
 
 
+def _call_transport() -> UrllibJsonTransport:
+    """Call-bound transport: the org worker key if present, else the gateway token."""
+    return UrllibJsonTransport(
+        base_url=os.environ["OPENPHONEX_CONTROL_PLANE_URL"],
+        bearer_token=call_credential_token(os.environ),
+    )
+
+
 def build_adapter() -> Gate2ControlPlaneAdapter:
     platform_token = os.environ.get("OPENPHONEX_PLATFORM_MEDIA_TOKEN", "").strip()
+    call_transport = _call_transport()
     return Gate2ControlPlaneAdapter(
         gateway_id=os.environ["OPENPHONEX_GATEWAY_ID"],
         organization_id=os.environ.get("OPENPHONEX_ORGANIZATION_ID", ""),
         transport=_transport("OPENPHONEX_GATEWAY_API_TOKEN"),
-        call_transport=_transport("OPENPHONEX_WORKER_API_TOKEN"),
-        tool_transport=_transport("OPENPHONEX_WORKER_API_TOKEN"),
+        call_transport=call_transport,
+        tool_transport=call_transport,
         platform_transport=(
             _transport("OPENPHONEX_PLATFORM_MEDIA_TOKEN") if platform_token else None
         ),
@@ -526,11 +542,91 @@ async def production_agent(ctx: JobContext) -> None:
     call: Any | None = None
     adapter: Gate2ControlPlaneAdapter | None = None
     participant: Any | None = None
+    # Bound before the guard below, not inside it: the dispatch is parsed after
+    # ``ctx.connect``, which can raise, and the handler reads this to decide
+    # whether anybody is listening.
+    browser_test: Any | None = None
     pre_media_call_id = ""
     pre_media_stage = "session_connect"
     inbound_route = INBOUND_CUSTOMER
     leased_components: dict[str, dict[str, str]] | None = None
     runtime_environ: dict[str, str] | None = None
+    browser_test_failure_reported = False
+    browser_test_report_in_flight = False
+    # Held so the teardown can wait for it. The report has to land while the
+    # room still exists -- it IS the room's metadata, and the browser reads it
+    # from there -- so a write still in flight when cleanup deletes the room is
+    # a report nobody receives.
+    browser_test_report_task: asyncio.Task[None] | None = None
+
+    async def report_browser_test_failure(component: str) -> None:
+        """Tell the browser its session will not speak.
+
+        Defined before the pre-media guard because BOTH sides need it: a stack
+        that fails to build never reaches the session at all, and the worker can
+        already be in the room by then -- so without this the dock would show a
+        live session ending in an ordinary hangup.
+
+        Success is what closes this, not the attempt: marking it done up front
+        meant one failed write silenced every later report, which is precisely
+        the connected-but-mute session this exists to prevent. The retries are a
+        LOOP rather than a counter checked once per call, because both callers
+        report exactly once -- a budget spent one attempt per invocation is a
+        budget nothing can ever draw on.
+
+        One deadline for the whole thing, not one per attempt. The pre-media
+        caller awaits this DIRECTLY, holding up the teardown behind it, and the
+        teardown of a live session waits on it for exactly this budget;
+        per-attempt timeouts multiply past both and go on writing to a room
+        already being deleted.
+
+        Cancellation is not a failure to log -- it is a caller withdrawing the
+        budget -- so it propagates instead of being caught and retried. Both
+        callers are prepared for that: the pre-media guard runs its teardown in
+        a `finally`, and the session teardown waits unshielded so its own
+        timeout is what does the cancelling.
+        """
+        nonlocal browser_test_failure_reported, browser_test_report_in_flight
+        if browser_test_failure_reported or browser_test_report_in_flight:
+            return
+        browser_test_report_in_flight = True
+        deadline = time.monotonic() + BROWSER_TEST_REPORT_BUDGET_SECONDS
+        try:
+            for attempt in range(3):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    emit("workspace_browser_test_error_publish_timeout", call_id=browser_test.call_id)
+                    return
+                try:
+                    await asyncio.wait_for(
+                        ctx.api.room.update_room_metadata(
+                            api.UpdateRoomMetadataRequest(
+                                room=ctx.room.name,
+                                metadata=browser_test_error_metadata(
+                                    str(getattr(ctx.room, "metadata", "") or ""),
+                                    component=component,
+                                ),
+                            )
+                        ),
+                        timeout=remaining,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # A room that cannot be told is still a room the deadline
+                    # reaps, and this must never displace the failure it is
+                    # reporting.
+                    emit(
+                        "workspace_browser_test_error_publish_failed",
+                        error=type(exc).__name__,
+                        attempt=attempt + 1,
+                    )
+                else:
+                    browser_test_failure_reported = True
+                    return
+        finally:
+            browser_test_report_in_flight = False
+
     try:
         await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
         pre_media_stage = "dispatch_validation"
@@ -641,6 +737,7 @@ async def production_agent(ctx: JobContext) -> None:
         # Do not label a Fish-only component-metered call as a Soniox stack;
         # only the selected Soniox STT/TTS adapters need this opaque reference.
         soniox_correlation_required = requires_soniox_usage_correlation(profile, call.config)
+        gemini_tts_usage_required = requires_gemini_tts_usage_metadata(profile, call.config)
         stack = build_demo_stack(
             profile,
             environ=runtime_environ,
@@ -655,6 +752,7 @@ async def production_agent(ctx: JobContext) -> None:
             # billing contract remain runnable rather than being rewritten or
             # newly rejected merely because the registry evolved.
             require_soniox_usage_reference=soniox_correlation_required,
+            require_gemini_tts_usage_metadata=gemini_tts_usage_required,
         )
         # This is the last operation before caller audio can be consumed.  It
         # must remain inside the pre-media guard: a rejected admission still
@@ -662,31 +760,45 @@ async def production_agent(ctx: JobContext) -> None:
         pre_media_stage = "media_admission"
         call.admit_media()
     except BaseException:
-        result = await terminate_pre_media_call(
-            call=call,
-            adapter=adapter,
-            call_id=pre_media_call_id,
-            reason={
-                "session_connect": "session_connect_rejected",
-                "dispatch_validation": "dispatch_validation_rejected",
-                "participant_wait": "participant_wait_rejected",
-                "adapter_configuration": "adapter_configuration_rejected",
-                "outbound_resume": "outbound_resume_rejected",
-                "inbound_prepare": "inbound_prepare_rejected",
-                "component_configuration": "component_configuration_rejected",
-                "media_admission": "media_admission_rejected",
-            }.get(pre_media_stage, "pre_media_rejected"),
-            remove_participant=lambda: remove_sip_participant_before_media(ctx, participant),
-            delete_room=ctx.delete_room,
-        )
-        emit(
-            "pre_media_terminated",
-            stage=pre_media_stage,
-            call_id=pre_media_call_id,
-            participant_terminated=result["participant_terminated"],
-            room_terminated=result["room_terminated"],
-            lifecycle_recorded=result["lifecycle_recorded"],
-        )
+        # The report is attempted first -- before the teardown deletes the room
+        # it lives in -- but it can never cost the teardown. A browser test
+        # rejected here has nothing to show for itself otherwise: the worker may
+        # already be in the room, so the dock reads a live session that simply
+        # hung up.
+        #
+        # `finally`, because the reporter re-raises `CancelledError` now. Without
+        # it a cancelled job skips `terminate_pre_media_call` and strands exactly
+        # what that call exists to release: a ringing SIP leg, a LiveKit room,
+        # and a wallet reservation. Telling a browser is never worth that.
+        try:
+            if browser_test is not None:
+                await report_browser_test_failure("session")
+        finally:
+            result = await terminate_pre_media_call(
+                call=call,
+                adapter=adapter,
+                call_id=pre_media_call_id,
+                reason={
+                    "session_connect": "session_connect_rejected",
+                    "dispatch_validation": "dispatch_validation_rejected",
+                    "participant_wait": "participant_wait_rejected",
+                    "adapter_configuration": "adapter_configuration_rejected",
+                    "outbound_resume": "outbound_resume_rejected",
+                    "inbound_prepare": "inbound_prepare_rejected",
+                    "component_configuration": "component_configuration_rejected",
+                    "media_admission": "media_admission_rejected",
+                }.get(pre_media_stage, "pre_media_rejected"),
+                remove_participant=lambda: remove_sip_participant_before_media(ctx, participant),
+                delete_room=ctx.delete_room,
+            )
+            emit(
+                "pre_media_terminated",
+                stage=pre_media_stage,
+                call_id=pre_media_call_id,
+                participant_terminated=result["participant_terminated"],
+                room_terminated=result["room_terminated"],
+                lifecycle_recorded=result["lifecycle_recorded"],
+            )
         raise
     finally:
         # Provider instances hold their own configuration, but the transient
@@ -771,7 +883,20 @@ async def production_agent(ctx: JobContext) -> None:
 
     heartbeat_task = asyncio.create_task(heartbeat())
 
-    session = AgentSession(**stack.session_options)
+    session_options = dict(stack.session_options)
+    if browser_test is not None:
+        # A browser test closes on the FIRST unrecoverable component error.
+        #
+        # LiveKit's default absorbs three per component before giving up, which
+        # is right for a phone call: a caller is on the line, and three more
+        # tries beat hanging up on them. A browser test is the opposite. Nobody
+        # is on the line, somebody is watching a page, and three silent turns is
+        # exactly the connected-but-mute session this work exists to abolish.
+        # Closing here is what makes the report below prompt rather than
+        # eventual, and it keeps the decision inside LiveKit's own budget
+        # instead of second-guessing it from a handler.
+        session_options["conn_options"] = SessionConnectOptions(max_unrecoverable_errors=0)
+    session = AgentSession(**session_options)
     telemetry_collector = CallTelemetryCollector(
         call_id=call.call_id,
         organization_id=str(call.config.get("organization_id") or ""),
@@ -881,7 +1006,33 @@ async def production_agent(ctx: JobContext) -> None:
 
     @session.on("error")
     def on_error(event: Any) -> None:
-        emit("session_error", call_id=call.call_id, error_type=type(event.error).__name__)
+        emit(
+            "session_error",
+            call_id=call.call_id,
+            **safe_component_error_diagnostics(getattr(event, "error", None)),
+        )
+
+    @session.on("close")
+    def on_close(event: Any) -> None:
+        nonlocal browser_test_report_task
+        # A browser test that connects, transcribes and never speaks looks
+        # healthy from the page: the transcript fills with the customer's own
+        # words and nothing says the pipeline is dead. The worker is the only
+        # party that knows, so tell the room. Phone calls are untouched --
+        # there is no dock listening, and a caller hears the silence.
+        #
+        # The CLOSE, not the error above: LiveKit absorbs several unrecoverable
+        # component errors before it gives up, and resets that budget on a turn
+        # that works. Reporting an error would end sessions it was about to
+        # recover.
+        if browser_test is None:
+            return
+        component = browser_test_close_component(
+            reason=getattr(event, "reason", None), error=getattr(event, "error", None)
+        )
+        if component is None:
+            return
+        browser_test_report_task = asyncio.create_task(report_browser_test_failure(component))
 
     ctx.room.on(
         "participant_disconnected",
@@ -942,12 +1093,54 @@ async def production_agent(ctx: JobContext) -> None:
     finally:
         ended_at = utcnow()
         heartbeat_task.cancel()
+        # Set if the browser-test report wait below is cancelled. Held so the
+        # teardown can finish and the cancellation can still surface afterwards.
+        browser_test_report_cancellation: BaseException | None = None
         async def cleanup_room() -> None:
             await cleanup_livekit_room(call, ctx.delete_room)
 
         try:
             await asyncio.gather(heartbeat_task, return_exceptions=True)
             await session.aclose()
+            # `aclose` is what emits the close event, so any browser-test report
+            # exists by now. Waited for HERE because the report is the room's own
+            # metadata and cleanup below deletes that room: a write still in
+            # flight then is a report the browser never receives. Bounded on the
+            # same budget the reporter uses, so neither side outlives the other.
+            if browser_test_report_task is not None:
+                # NOT shielded. A shield would make this timeout cancel the
+                # shield and leave the reporter running, so a write that ignores
+                # its own deadline could still be in flight when cleanup_room()
+                # below deletes the room -- the one outcome this wait exists to
+                # prevent. Unshielded, the timeout cancels the reporter, which is
+                # what its CancelledError handler is written for.
+                try:
+                    await asyncio.wait_for(
+                        browser_test_report_task,
+                        timeout=BROWSER_TEST_REPORT_BUDGET_SECONDS,
+                    )
+                except (TimeoutError, asyncio.TimeoutError):
+                    emit("workspace_browser_test_error_publish_timeout", call_id=call.call_id)
+                except asyncio.CancelledError as exc:
+                    # DEFERRED, not swallowed and not re-raised here.
+                    #
+                    # Re-raising immediately would skip everything after this
+                    # wait -- the sidecar, capture tasks, component billing,
+                    # room.ended and sip.ended -- and leave only the outer
+                    # handler's room delete. Swallowing it outright would let a
+                    # cancelled job run to the end and return as though it had
+                    # succeeded, which is a lie to the worker supervising it.
+                    #
+                    # So the teardown runs to completion and the cancellation is
+                    # re-raised at the end of it. Narrower than BaseException on
+                    # purpose, so a KeyboardInterrupt still stops the worker now.
+                    browser_test_report_cancellation = exc
+                    emit("workspace_browser_test_error_publish_cancelled", call_id=call.call_id)
+                except Exception as exc:
+                    emit(
+                        "workspace_browser_test_error_publish_failed",
+                        error=type(exc).__name__,
+                    )
             await sidecar.disconnect()
             if capture_tasks:
                 await asyncio.gather(*capture_tasks, return_exceptions=True)
@@ -1055,6 +1248,11 @@ async def production_agent(ctx: JobContext) -> None:
             )
         finally:
             await asyncio.shield(cleanup_room())
+        # The teardown has finished, including both room-delete paths, so the
+        # cancellation deferred at the report wait can surface now. Without this
+        # a cancelled job returns as though it had succeeded.
+        if browser_test_report_cancellation is not None:
+            raise browser_test_report_cancellation
 
 
 if __name__ == "__main__":

@@ -265,7 +265,10 @@ def normalized_usage_from_model_usage(
     thinking, so ``llm_reasoning_tokens`` remains zero rather than invented.
     """
     expected = _expected_components(config)
+    expected_gemini_tts = expected["tts"][0] == "gemini"
     totals: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    gemini_tts_input_tokens = 0
+    gemini_tts_output_tokens = 0
     seen: set[str] = set()
     kind_for_type = {"stt_usage": "stt", "llm_usage": "llm", "tts_usage": "tts"}
     for usage in model_usage:
@@ -279,9 +282,7 @@ def normalized_usage_from_model_usage(
                 f"{kind} SDK usage identity does not match the pinned component contract"
             )
         seen.add(kind)
-        if kind == "stt":
-            totals[kind]["audio_seconds"] += _number(getattr(usage, "audio_duration", 0))
-        elif kind == "llm":
+        if kind == "llm":
             input_tokens = _number(getattr(usage, "input_tokens", 0))
             cached_tokens = _number(getattr(usage, "input_cached_tokens", 0))
             if cached_tokens > input_tokens:
@@ -289,9 +290,25 @@ def normalized_usage_from_model_usage(
             totals[kind]["input_tokens"] += input_tokens - cached_tokens
             totals[kind]["cached_input_tokens"] += cached_tokens
             totals[kind]["output_tokens"] += _number(getattr(usage, "output_tokens", 0))
-        else:
-            totals[kind]["characters"] += _number(getattr(usage, "characters_count", 0))
+        elif kind in {"stt", "tts"}:
             totals[kind]["audio_seconds"] += _number(getattr(usage, "audio_duration", 0))
+            if kind == "tts":
+                totals[kind]["characters"] += _number(getattr(usage, "characters_count", 0))
+                if expected_gemini_tts:
+                    # The OpenPhonex Gemini adapter passes the provider's exact
+                    # cumulative prompt/audio token counts through TTSMetrics.
+                    # A missing field is not an SDK zero: paid settlement must
+                    # retain its reservation rather than guess from duration.
+                    gemini_tts_input_tokens += _whole_number(
+                        getattr(usage, "input_tokens", None),
+                        field="Gemini TTS input token usage",
+                    )
+                    gemini_tts_output_tokens += _whole_number(
+                        getattr(usage, "output_tokens", None),
+                        field="Gemini TTS output token usage",
+                    )
+        else:  # Defensive future-proofing if kind_for_type gains a new value.
+            raise MeteringContractError("SDK usage has an unsupported component kind")
     # Absence is a metering failure, not a signal to estimate from duration.
     # A zero-valued native metrics object still counts as evidence.
     if seen != {"stt", "llm", "tts"}:
@@ -343,7 +360,7 @@ def normalized_usage_from_model_usage(
     supplied_names = {str(name) for name in supplied_soniox}
     if supplied_names != expected_soniox:
         raise MeteringContractError("Soniox usage evidence does not match the pinned component contract")
-    soniox_tokens: dict[str, int] = {
+    native_token_usage: dict[str, int] = {
         "stt_input_audio_tokens": 0,
         "stt_output_text_tokens": 0,
         "tts_input_text_tokens": 0,
@@ -357,14 +374,17 @@ def normalized_usage_from_model_usage(
         if set(raw_component) != set(dimensions):
             raise MeteringContractError("Soniox usage evidence dimensions are incomplete")
         for dimension in dimensions:
-            soniox_tokens[f"{component}_{dimension}"] = _whole_number(
+            native_token_usage[f"{component}_{dimension}"] = _whole_number(
                 raw_component[dimension], field=f"Soniox {component} {dimension}"
             )
+    if expected_gemini_tts:
+        native_token_usage["tts_input_text_tokens"] = gemini_tts_input_tokens
+        native_token_usage["tts_output_audio_tokens"] = gemini_tts_output_tokens
     return {
         "source": "livekit_agent_sdk",
         "stt_audio_seconds": totals["stt"]["audio_seconds"],
-        "stt_input_audio_tokens": soniox_tokens["stt_input_audio_tokens"],
-        "stt_output_text_tokens": soniox_tokens["stt_output_text_tokens"],
+        "stt_input_audio_tokens": native_token_usage["stt_input_audio_tokens"],
+        "stt_output_text_tokens": native_token_usage["stt_output_text_tokens"],
         "llm_input_tokens": int(totals["llm"]["input_tokens"]),
         "llm_cached_input_tokens": int(totals["llm"]["cached_input_tokens"]),
         # LiveKit Agents 1.6.6 exposes no separate reasoning count; Gemini's
@@ -374,7 +394,7 @@ def normalized_usage_from_model_usage(
         "tts_characters": int(totals["tts"]["characters"]),
         "tts_audio_seconds": totals["tts"]["audio_seconds"],
         "tts_utf8_bytes": int(native_tts_utf8_bytes),
-        "tts_input_text_tokens": soniox_tokens["tts_input_text_tokens"],
-        "tts_output_audio_tokens": soniox_tokens["tts_output_audio_tokens"],
+        "tts_input_text_tokens": native_token_usage["tts_input_text_tokens"],
+        "tts_output_audio_tokens": native_token_usage["tts_output_audio_tokens"],
         "tool_units": safe_tools,
     }

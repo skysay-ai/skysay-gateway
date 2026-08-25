@@ -1,0 +1,55 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gateway_outbound_call_request.json",
+  "title": "POST /v1/gateway-deployments/{id}/outbound-calls request body",
+  "type": "object",
+  "properties": {
+    "to": {
+      "type": "string"
+    },
+    "from_phone_number": {
+      "type": "string"
+    },
+    "from_number_id": {
+      "type": "string"
+    },
+    "agent_id": {
+      "type": "string"
+    },
+    "agent_endpoint_id": {
+      "type": "string"
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "recipient_type": {
+      "type": "string"
+    },
+    "relationship": {
+      "type": "string"
+    },
+    "user_authorization": {
+      "type": "object"
+    },
+    "recording_enabled": {
+      "type": "boolean"
+    },
+    "call_context": {
+      "type": "object"
+    },
+    "external_reference": {
+      "type": "string"
+    },
+    "external_group_reference": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "to"
+  ],
+  "additionalProperties": false
+}

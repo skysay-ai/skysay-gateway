@@ -202,15 +202,15 @@ def post_livekit_worker_heartbeat(
     )
 
 
-# STT registry_name -> the one model each is pinned to. Deepgram (nova-3) is
-# the default English/Estonian path; Google (chirp_2) is the si-LK (Sinhala)
-# path -- Deepgram does not support Sinhala at all. Chirp 2 in the
-# asia-southeast1 recognizer location is the empirically verified si-LK
-# path (Chirp 3 rejects si-LK with an HTTP 400 in both eu and us).
-_LEGACY_STT_REGISTRY_MODELS: dict[str, str] = {
-    "deepgram": "nova-3",
-    "google": "chirp_2",
+# STT registry_name -> the historical models the worker can construct.
+# Deepgram nova-3 remains the default English/Estonian path. Google Chirp 2 is
+# retained for languages where Google documents streaming support, while
+# command_and_search is the documented streaming si-LK path.
+_LEGACY_STT_REGISTRY_MODELS: dict[str, frozenset[str]] = {
+    "deepgram": frozenset({"nova-3"}),
+    "google": frozenset({"chirp_2", "command_and_search"}),
 }
+_LEGACY_STT_DEFAULT_MODELS = {"deepgram": "nova-3", "google": "chirp_2"}
 # TTS registry_names this worker knows how to build. ElevenLabs is the default
 # English/Estonian path; ``gemini_tts`` (Gemini-TTS) is the si-LK (Sinhala)
 # path -- ElevenLabs does not support Sinhala at all.
@@ -231,6 +231,16 @@ def requires_soniox_usage_correlation(profile: DemoProfile, config: Mapping[str,
         and billing.get("usage_required") is True
         and (profile.stt_registry == "soniox" or profile.tts_registry == "soniox")
     )
+
+
+def requires_gemini_tts_usage_metadata(profile: DemoProfile, _config: Mapping[str, Any]) -> bool:
+    """Whether a production Gemini TTS stream must provide native response tokens.
+
+    Unlike the explicitly non-chargeable demo agents, the production worker
+    never takes a billing-config opt-out. Missing or malformed component
+    billing data must not downgrade a Gemini synthesis to unmetered media.
+    """
+    return profile.tts_registry == "gemini_tts"
 
 
 def profile_from_realtime_config(config: dict[str, Any]) -> DemoProfile:
@@ -255,12 +265,12 @@ def profile_from_realtime_config(config: dict[str, Any]) -> DemoProfile:
         if stt_registry != stt_capability["registry_name"]:
             raise ProductionConfigurationError("realtime-config STT registry does not match the capability artifact")
     else:
-        expected_stt_model = _LEGACY_STT_REGISTRY_MODELS.get(stt_registry)
+        expected_stt_models = _LEGACY_STT_REGISTRY_MODELS.get(stt_registry)
         if (
             language not in registry.legacy_runtime_languages
             or registry.owns_component_provider("stt", stt_provider)
-            or expected_stt_model is None
-            or stt_model != expected_stt_model
+            or expected_stt_models is None
+            or stt_model not in expected_stt_models
         ):
             raise ProductionConfigurationError("realtime-config must resolve a supported STT provider/model")
     if str(model.get("registry_name") or "").lower() not in {"gemini", "google"}:
@@ -281,9 +291,13 @@ def profile_from_realtime_config(config: dict[str, Any]) -> DemoProfile:
         raise ProductionConfigurationError("Estonian requires ElevenLabs TTS")
     if language == "et" and "flash" in tts_model.lower():
         raise ProductionConfigurationError("Estonian requires an ElevenLabs multilingual model")
-    if language == "si" and (stt_registry != "google" or tts_registry != "gemini_tts"):
+    if language == "si" and (
+        stt_registry != "google"
+        or stt_model != "command_and_search"
+        or tts_registry != "gemini_tts"
+    ):
         raise ProductionConfigurationError(
-            "Sinhala requires Google Chirp STT and Gemini TTS (Deepgram and ElevenLabs do not "
+            "Sinhala requires Google streaming STT and Gemini TTS (Deepgram and ElevenLabs do not "
             "support si-LK)"
         )
     tts_capability = registry.capability("tts", tts_provider, tts_model)
@@ -358,7 +372,7 @@ def component_model_labels(profile: DemoProfile) -> dict[str, str]:
     """
 
     return {
-        "stt": profile.stt_model or _LEGACY_STT_REGISTRY_MODELS.get(profile.stt_registry, ""),
+        "stt": profile.stt_model or _LEGACY_STT_DEFAULT_MODELS.get(profile.stt_registry, ""),
         "llm": profile.llm_model,
         "tts": profile.tts_model,
     }
@@ -435,6 +449,124 @@ def safe_pre_media_reason(reason: str) -> str:
     return "pre_media_rejected"
 
 
+BROWSER_TEST_ERROR_KEY = "session_error"
+
+# The whole vocabulary that may reach a customer's browser. LiveKit names the
+# failing component on its error models (``tts_error``, ``llm_error``, ...);
+# anything this worker cannot place is reported as the session having stopped
+# rather than passed through. A closed set is the point: exception classes and
+# provider prose are written for a log, can carry request URLs and account
+# detail, and are not this room's to publish.
+BROWSER_TEST_ERROR_COMPONENTS = frozenset({"stt", "llm", "tts", "realtime", "session"})
+
+# ``livekit.agents.voice.events.CloseReason.ERROR``. The other reasons are
+# ordinary endings and are not this channel's business.
+BROWSER_TEST_CLOSE_REASON = "error"
+
+# How long the worker may spend telling a browser test that it failed, end to
+# end and across every retry. One number because two parties enforce it: the
+# reporter's own deadline and the teardown's wait on it. Held apart they drift,
+# and the losing side goes on writing to a room the winning side is deleting.
+BROWSER_TEST_REPORT_BUDGET_SECONDS = 5.0
+
+_LIVEKIT_ERROR_COMPONENTS = {
+    "stt_error": "stt",
+    "llm_error": "llm",
+    "tts_error": "tts",
+    "realtime_model_error": "realtime",
+}
+
+
+def safe_component_error_diagnostics(error: Any) -> dict[str, Any]:
+    """Return bounded type-only diagnostics for a LiveKit component error.
+
+    ``ErrorEvent.error`` is a Pydantic wrapper (``STTError``/``TTSError``/...)
+    whose ``.error`` field contains the provider exception. LiveKit's normal
+    log message deliberately reduces that exception to ``Connection error``;
+    that is safe for callers but not enough to distinguish a Google gRPC
+    status from a local frame/loop bug. Provider exception *messages* can
+    contain URLs, voice IDs, account identifiers, and credential material, so
+    this helper records only class names and a bounded cause chain. It never
+    stringifies an exception.
+    """
+
+    def _type_name(value: Any) -> str:
+        name = type(value).__name__
+        return name[:80] if name else "UnknownError"
+
+    diagnostics: dict[str, Any] = {"error_type": _type_name(error)}
+    provider_error = getattr(error, "error", None)
+    if not isinstance(provider_error, BaseException):
+        return diagnostics
+
+    diagnostics["provider_error_type"] = _type_name(provider_error)
+    cause_types: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = provider_error
+    while current is not None and len(cause_types) < 6 and id(current) not in seen:
+        seen.add(id(current))
+        cause_types.append(_type_name(current))
+        cause = current.__cause__ or current.__context__
+        current = cause if isinstance(cause, BaseException) else None
+    diagnostics["provider_cause_types"] = cause_types
+    return diagnostics
+
+
+def browser_test_close_component(*, reason: Any, error: Any) -> str | None:
+    """Which component to report to a browser test, or ``None`` to stay quiet.
+
+    Keyed on the session CLOSING, not on an error event, because an error is not
+    the same as a dead session. LiveKit tolerates
+    ``conn_options.max_unrecoverable_errors`` consecutive unrecoverable failures
+    per component (three, by default) and resets that count as soon as a turn
+    succeeds -- so a single ``recoverable=False`` error is a turn that failed,
+    not a pipeline that stopped. Reporting one would end sessions LiveKit was
+    about to recover: the same silent-failure bug with the sign flipped, and the
+    more irritating half, because it fires on calls that were fine.
+
+    ``CloseReason.ERROR`` is LiveKit giving up. Every other reason is an ordinary
+    ending -- the customer hung up, the job shut down -- and says nothing.
+
+    The component name still comes from the error the close carries, and an
+    unrecognised shape reports as the session rather than as nothing: this whole
+    path exists because a dead pipeline presented as a healthy one.
+    """
+
+    if str(getattr(reason, "value", reason) or "") != BROWSER_TEST_CLOSE_REASON:
+        return None
+    # Read through ``.value`` like the reason above. These are plain strings on
+    # today's models, but a str Enum here would stringify to its NAME and quietly
+    # demote every component to "session".
+    error_type = getattr(error, "type", "")
+    return _LIVEKIT_ERROR_COMPONENTS.get(str(getattr(error_type, "value", error_type) or ""), "session")
+
+
+def browser_test_error_metadata(existing: str, *, component: str) -> str:
+    """Room metadata that tells a browser test its pipeline stopped.
+
+    A session whose TTS cannot start keeps transcribing the caller, so from the
+    browser the room looks healthy and simply never answers. The worker is the
+    only party that knows otherwise, and room metadata is the one channel it can
+    already write and the browser already receives.
+
+    The reservation route writes ``kind`` and ``agent_id`` into this same
+    metadata at creation, so the existing document is merged rather than
+    replaced.
+    """
+
+    candidate = str(component or "").strip()
+    if candidate not in BROWSER_TEST_ERROR_COMPONENTS:
+        candidate = "session"
+    try:
+        document = json.loads(str(existing or "") or "{}")
+    except ValueError:
+        document = {}
+    if not isinstance(document, dict):
+        document = {}
+    document[BROWSER_TEST_ERROR_KEY] = {"component": candidate}
+    return json.dumps(document, sort_keys=True, allow_nan=False)
+
+
 class PreMediaTermination:
     """Cancellation-safe, idempotent cleanup for a ringing SIP participant.
 
@@ -477,9 +609,15 @@ class PreMediaTermination:
 
     async def _terminate_once(self, reason: str) -> dict[str, Any]:
         deadline = self._clock() + self._timeout_seconds
+        # ensure_future, not create_task: these are ``Awaitable[None]``
+        # factories, and LiveKit's own ``JobContext.delete_room`` already hands
+        # back a tracked Task rather than a bare coroutine. create_task rejects
+        # that with a TypeError raised inside the teardown path itself, so the
+        # failure that pre-media termination exists to clean up would take the
+        # cleanup down with it.
         actions = {
-            "participant": asyncio.create_task(self._remove_participant()),
-            "room": asyncio.create_task(self._delete_room()),
+            "participant": asyncio.ensure_future(self._remove_participant()),
+            "room": asyncio.ensure_future(self._delete_room()),
         }
         remaining = max(0.0, deadline - self._clock())
         done, pending = await asyncio.wait(set(actions.values()), timeout=remaining)

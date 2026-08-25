@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import tempfile
@@ -7,6 +8,8 @@ import threading
 import time
 import unittest
 import wave
+from enum import Enum
+from types import SimpleNamespace
 from pathlib import Path
 
 from livekit_agent.production import (
@@ -20,8 +23,11 @@ from livekit_agent.production import (
     is_greeting_fragment,
     post_livekit_worker_heartbeat,
     PeriodicWorkerHeartbeat,
+    browser_test_close_component,
+    browser_test_error_metadata,
     component_model_labels,
     profile_from_realtime_config,
+    safe_component_error_diagnostics,
     service_heartbeat_environ,
     terminate_pre_media_call,
     worker_heartbeat_metadata,
@@ -208,6 +214,48 @@ class _HeartbeatTransport:
         return {"id": "whb_1", **payload}
 
 
+# The self-hosted gateway export ships this suite AND the worker, but relocates
+# the worker to `livekit_agent/`. Both layouts are resolved so these guards run
+# against the exported copy too: skipping there would switch them off in the one
+# tree where drift between the two is most likely to appear first, which is
+# worse than the FileNotFoundError this replaced.
+_PRODUCTION_AGENT_CANDIDATES = (
+    Path(__file__).resolve().parents[1] / "apps" / "voice" / "agent" / "production_agent.py",
+    Path(__file__).resolve().parents[1] / "livekit_agent" / "agent" / "production_agent.py",
+)
+_PRODUCTION_AGENT = next(
+    (candidate for candidate in _PRODUCTION_AGENT_CANDIDATES if candidate.exists()), None
+)
+_worker_source_guard = unittest.skipUnless(
+    _PRODUCTION_AGENT is not None, "no worker entrypoint in this tree"
+)
+
+
+def _calls_named(node: ast.AST, name: str) -> list[ast.Call]:
+    """Every ``name(...)`` call anywhere under ``node``, by attribute or plain name."""
+    found = []
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        func = child.func
+        if isinstance(func, ast.Name) and func.id == name:
+            found.append(child)
+        elif isinstance(func, ast.Attribute) and func.attr == name:
+            found.append(child)
+    return found
+
+
+def _mentions(node: ast.AST, name: str) -> bool:
+    """Whether ``name`` appears anywhere under ``node`` as a call or a bare name."""
+    if _calls_named(node, name):
+        return True
+    return any(
+        (isinstance(child, ast.Name) and child.id == name)
+        or (isinstance(child, ast.Attribute) and child.attr == name)
+        for child in ast.walk(node)
+    )
+
+
 class SCH236LiveKitProductionTests(unittest.TestCase):
     def test_pre_media_failure_removes_participant_and_room_before_sip_failure(self) -> None:
         async def scenario() -> tuple[dict[str, object], list[str]]:
@@ -247,6 +295,570 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         self.assertEqual(result["reason"], "pre_media_rejected")
         self.assertTrue(result["participant_terminated"])
         self.assertTrue(result["room_terminated"])
+        self.assertTrue(result["lifecycle_recorded"])
+
+    def test_browser_test_error_metadata_keeps_the_reservation_document(self) -> None:
+        """The route writes this document first; the worker adds to it, never over it."""
+        existing = json.dumps(
+            {"kind": "workspace_browser_test", "agent_id": "agent_1"}, sort_keys=True
+        )
+
+        merged = json.loads(browser_test_error_metadata(existing, component="tts"))
+
+        self.assertEqual(merged["kind"], "workspace_browser_test")
+        self.assertEqual(merged["agent_id"], "agent_1")
+        self.assertEqual(merged["session_error"], {"component": "tts"})
+
+    def test_browser_test_error_metadata_publishes_no_provider_prose(self) -> None:
+        """This document is readable by the customer's browser.
+
+        LiveKit's own error text carries the full request URL -- voice id, model,
+        output format, every query parameter -- and a different provider could
+        put an account identifier there just as easily. Nothing outside the
+        closed component set may cross into a room a customer is sitting in.
+        """
+        hostile = (
+            "message='Invalid response status', status_code=403, url='wss://"
+            "api.elevenlabs.io/v1/text-to-speech/Xb7hH8MSUJpSbSDYk0k2/multi-stream-input"
+            "?model_id=eleven_v3&xi-api-key=sk-secret'"
+        )
+
+        published = browser_test_error_metadata("{}", component=hostile)
+
+        self.assertNotIn("elevenlabs", published)
+        self.assertNotIn("sk-secret", published)
+        self.assertNotIn("Xb7hH8MSUJpSbSDYk0k2", published)
+        self.assertEqual(json.loads(published)["session_error"], {"component": "session"})
+
+    def test_browser_test_error_metadata_survives_a_document_it_cannot_parse(self) -> None:
+        """Unreadable metadata must not cost the browser its only failure signal."""
+        for existing in ("", "not json", "[]", "null"):
+            with self.subTest(existing=existing):
+                merged = json.loads(browser_test_error_metadata(existing, component="tts"))
+                self.assertEqual(merged["session_error"], {"component": "tts"})
+
+    def test_an_ordinary_ending_is_not_reported_as_a_failure(self) -> None:
+        """Most closes are somebody hanging up. Only ``error`` is LiveKit giving up."""
+        for reason in ("user_initiated", "participant_disconnected", "job_shutdown", "task_completed"):
+            with self.subTest(reason=reason):
+                self.assertIsNone(browser_test_close_component(reason=reason, error=None))
+
+    def test_a_failed_turn_is_not_a_failed_session(self) -> None:
+        """The signal is the CLOSE, and a component error is not one.
+
+        ``AgentSession`` absorbs ``max_unrecoverable_errors`` consecutive
+        unrecoverable failures per component -- three by default -- and resets
+        that count on the next turn that works. So ``recoverable=False`` means a
+        turn failed, not that the pipeline stopped. Reporting one would end
+        sessions LiveKit was about to recover: the same silent-failure bug with
+        the sign flipped, and the more irritating half, because it fires on calls
+        that were fine.
+        """
+        failed_turn = SimpleNamespace(type="tts_error", recoverable=False)
+        self.assertIsNone(browser_test_close_component(reason=None, error=failed_turn))
+
+    def test_a_close_on_error_names_the_component_that_stopped(self) -> None:
+        for error_type, component in (
+            ("tts_error", "tts"),
+            ("llm_error", "llm"),
+            ("stt_error", "stt"),
+            ("realtime_model_error", "realtime"),
+        ):
+            with self.subTest(error_type=error_type):
+                error = SimpleNamespace(type=error_type, recoverable=False)
+                self.assertEqual(
+                    browser_test_close_component(reason="error", error=error), component
+                )
+
+    def test_the_reason_is_read_through_a_str_enum_as_livekit_sends_it(self) -> None:
+        """``CloseReason`` is a ``str`` Enum, and ``str()`` on one is its NAME.
+
+        Comparing the enum member itself against "error" without going through
+        ``.value`` yields "CloseReason.ERROR" and matches nothing, so every real
+        failure would report as an ordinary hangup -- silently, which is the one
+        way this must not break.
+        """
+
+        class _CloseReason(str, Enum):
+            ERROR = "error"
+            USER_INITIATED = "user_initiated"
+
+        error = SimpleNamespace(type="tts_error", recoverable=False)
+        self.assertEqual(browser_test_close_component(reason=_CloseReason.ERROR, error=error), "tts")
+        self.assertIsNone(
+            browser_test_close_component(reason=_CloseReason.USER_INITIATED, error=error)
+        )
+
+    def test_an_unrecognised_failure_shape_is_reported_rather_than_swallowed(self) -> None:
+        """Silence is the bug. A close on error with no readable error is still a failure.
+
+        A future LiveKit release, or a plugin raising its own model, can close
+        carrying something with no ``type``. Defaulting that to "say nothing"
+        would rebuild the exact silence this path exists to end.
+        """
+        self.assertEqual(browser_test_close_component(reason="error", error=None), "session")
+        self.assertEqual(
+            browser_test_close_component(reason="error", error=RuntimeError("boom")), "session"
+        )
+
+    def test_component_error_diagnostics_are_type_only_and_bounded(self) -> None:
+        secret = "https://speech.googleapis.com?key=sk-must-not-log"
+        deepest = RuntimeError(secret)
+        current: BaseException = deepest
+        for index in range(10):
+            wrapped = ValueError(f"provider detail {index}: {secret}")
+            wrapped.__cause__ = current
+            current = wrapped
+        outer = SimpleNamespace(error=current)
+
+        diagnostics = safe_component_error_diagnostics(outer)
+
+        self.assertEqual(diagnostics["error_type"], "SimpleNamespace")
+        self.assertEqual(diagnostics["provider_error_type"], "ValueError")
+        self.assertEqual(len(diagnostics["provider_cause_types"]), 6)
+        self.assertTrue(
+            all(
+                name in {"ValueError", "RuntimeError"}
+                for name in diagnostics["provider_cause_types"]
+            )
+        )
+        self.assertNotIn("speech.googleapis.com", json.dumps(diagnostics))
+        self.assertNotIn("sk-must-not-log", json.dumps(diagnostics))
+
+    def test_component_error_diagnostics_tolerate_livekit_shape_without_provider_error(
+        self,
+    ) -> None:
+        self.assertEqual(
+            safe_component_error_diagnostics(SimpleNamespace(type="stt_error")),
+            {"error_type": "SimpleNamespace"},
+        )
+
+    @staticmethod
+    def _production_agent_source() -> str:
+        return _PRODUCTION_AGENT.read_text()
+
+    @_worker_source_guard
+    def test_the_browser_failure_report_is_wired_to_the_session_and_to_the_pre_media_guard(
+        self,
+    ) -> None:
+        """The predicate and the metadata are unit-tested; the glue that calls them is not.
+
+        ``production_agent.py`` cannot be imported here -- no livekit package
+        exists anywhere in this repo -- so its wiring is asserted against the
+        source, the same way ``test_workflow_talk_worker`` asserts the turn glue.
+        Weaker than executing it, and named as such. What it catches is the whole
+        reporting path being deleted or rerouted while every unit test around it
+        stays green, which is exactly the shape a reviewer found here.
+        """
+        source = self._production_agent_source()
+
+        # The session seam: keyed on the close, reading the reason AND the error,
+        # and handing the component to the one reporter.
+        self.assertIn('@session.on("close")', source)
+        close = source[source.index('@session.on("close")') :]
+        close = close[: close.index("\n    ctx.room.on(")]
+        self.assertIn("browser_test_close_component(", close)
+        self.assertIn("reason=getattr(event, \"reason\", None)", close)
+        self.assertIn("report_browser_test_failure(component)", close)
+        # Phone calls have no dock listening and must not pay for this at all.
+        self.assertIn("if browser_test is None:", close)
+
+        # The pre-media seam: a stack that will not build never reaches the
+        # session, so the guard reports before the teardown deletes the room.
+        guard = source[source.index("    except BaseException:") :]
+        guard = guard[: guard.index("terminate_pre_media_call(")]
+        self.assertIn('report_browser_test_failure("session")', guard)
+
+        # Structure, not adjacency. Asserting that a `finally:` appears after the
+        # report only proves ordering, and a dummy `try: pass finally: pass`
+        # before the teardown satisfies that while restoring the exact strand
+        # this closed. The teardown must be IN the finally of the try that runs
+        # the report, which only the tree can say.
+        tree = ast.parse(source)
+        # Matched on the CALL, not a mention: a decoy `try: report_browser_test_failure`
+        # (a bare name) beside a real `finally: terminate_pre_media_call()` would
+        # satisfy a mention-based check while the real report sat in a dummy
+        # try/finally elsewhere. And it must be the SAME Try, not any two.
+        reporting_tries = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Try)
+            and any(_calls_named(stmt, "report_browser_test_failure") for stmt in node.body)
+        ]
+        self.assertEqual(len(reporting_tries), 1, "one try may run the pre-media report")
+        self.assertTrue(
+            any(
+                _calls_named(stmt, "terminate_pre_media_call")
+                for stmt in reporting_tries[0].finalbody
+            ),
+            "terminate_pre_media_call must run in the finally of that same try",
+        )
+
+        # And the teardown waits for the write, because the room it lives in is
+        # about to be deleted.
+        waits = [
+            call
+            for call in _calls_named(tree, "wait_for")
+            if _mentions(call, "browser_test_report_task")
+        ]
+        self.assertEqual(len(waits), 1, "exactly one teardown wait on the report task")
+        wait = waits[0]
+        # Placed between the close that produces the report and the delete that
+        # destroys the room it lives in. That ordering is the entire reason this
+        # wait exists, so it is pinned by line rather than left to the prose.
+        closes = [call for call in _calls_named(tree, "aclose") if _mentions(call, "session")]
+        self.assertTrue(closes, "the session close must precede the wait")
+        self.assertLess(min(c.lineno for c in closes), wait.lineno)
+        # EVERY shape a room delete takes, not just the wrapper. A reviewer put
+        # `await cleanup_livekit_room(call, ctx.delete_room)` and `await
+        # ctx.delete_room()` before the wait and an earlier version of this
+        # assertion passed both, while either one destroys the room the report is
+        # still writing to -- the silent failure this whole branch exists to end.
+        #
+        # Scoped to the entrypoint, not the module: line order only stands in for
+        # run order inside one function body, and an unrelated helper elsewhere
+        # that happens to delete a room is not this contract's business.
+        entrypoint = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "production_agent"
+        )
+        # Nested delete helpers are excluded by what they DO, not by their name:
+        # they wrap the delete and are defined before the wait, and pinning the
+        # name would break on a rename that changes no behaviour.
+        wrappers = [
+            node
+            for node in ast.walk(entrypoint)
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and node is not entrypoint
+            and _calls_named(node, "cleanup_livekit_room")
+        ]
+        inside_wrapper = {id(node) for wrapper in wrappers for node in ast.walk(wrapper)}
+        # Known limit, and the reason this is a guard rather than a proof: it
+        # matches call SHAPES, so `delete = ctx.delete_room; await delete()`
+        # slips past. Closing that needs the teardown extracted into something
+        # importable and driven for real, which is a refactor of the worker
+        # entrypoint rather than part of this fix.
+        deletes = [
+            call
+            for name in ("cleanup_room", "cleanup_livekit_room", "delete_room")
+            for call in _calls_named(entrypoint, name)
+            if id(call) not in inside_wrapper
+        ]
+        self.assertTrue(deletes, "the room delete must follow the wait")
+        early = [call.lineno for call in deletes if call.lineno < wait.lineno]
+        self.assertFalse(
+            early, f"no room delete may run before the report wait; found at {early}"
+        )
+        # The SAME constant the reporter budgets against, as the timeout ARGUMENT.
+        # A literal reads identically and lets the two clocks drift apart, which
+        # is the whole reason that constant exists.
+        timeouts = [kw.value for kw in wait.keywords if kw.arg == "timeout"]
+        self.assertEqual(len(timeouts), 1, "the wait must carry an explicit timeout")
+        self.assertIsInstance(timeouts[0], ast.Name)
+        self.assertEqual(timeouts[0].id, "BROWSER_TEST_REPORT_BUDGET_SECONDS")
+        # Unshielded, or the timeout cancels the shield and leaves the reporter
+        # running against a room this teardown is about to delete.
+        self.assertFalse(
+            _calls_named(wait, "shield"), "the awaited task must not be shielded"
+        )
+        # Nor the wait itself. `await asyncio.shield(asyncio.wait_for(...))` is the
+        # realistic "make cancellation safer" move, and it puts the job's
+        # CancelledError on the shield rather than in the handler below -- so the
+        # deferral never records and the wait can outlive shutdown.
+        self.assertFalse(
+            [
+                call
+                for call in _calls_named(tree, "shield")
+                if any(inner is wait for inner in _calls_named(call, "wait_for"))
+            ],
+            "the wait must not be wrapped in a shield either",
+        )
+
+        # The handlers around that wait, pinned by shape. This one DEFERS
+        # cancellation rather than choosing a side. Re-raising here would skip
+        # the sidecar, capture tasks, billing and the lifecycle reports, leaving
+        # only the outer handler's room delete; swallowing it outright would let
+        # a cancelled job return as though it had succeeded. So it records the
+        # cancellation, the teardown finishes, and the raise happens at the end.
+        # A bare `except BaseException` would also swallow KeyboardInterrupt, so
+        # the narrow handler is the contract.
+        # The try wrapping the WAIT, not any enclosing one: the outer teardown
+        # try also contains this task by name, and matching it would read the
+        # wrong handlers entirely.
+        def _awaits_directly(stmt: ast.stmt, call: ast.Call) -> bool:
+            return (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Await)
+                and stmt.value.value is call
+            )
+
+        teardown_tries = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Try)
+            and any(_awaits_directly(stmt, wait) for stmt in node.body)
+        ]
+        self.assertEqual(len(teardown_tries), 1, "the wait must be guarded by exactly one try")
+        teardown_try = teardown_tries[0]
+        caught = [
+            handler.type for handler in teardown_try.handlers if handler.type is not None
+        ]
+        self.assertTrue(
+            any(_mentions(exc, "CancelledError") for exc in caught),
+            "the teardown wait must handle cancellation rather than propagate it",
+        )
+        cancel_handler = next(
+            handler
+            for handler in teardown_try.handlers
+            if handler.type is not None and _mentions(handler.type, "CancelledError")
+        )
+        # Nothing anywhere under it may leave early. `if True: raise` and a bare
+        # `return` both restore the skip this closed, and both passed a top-level
+        # `isinstance` check.
+        self.assertFalse(
+            any(
+                isinstance(node, (ast.Raise, ast.Return))
+                for stmt in cancel_handler.body
+                for node in ast.walk(stmt)
+            ),
+            "this handler must not leave the teardown early, at any depth",
+        )
+        # It defers instead: records the cancellation, and the teardown re-raises
+        # it once the cleanup below has finished. Swallowing it outright would
+        # let a cancelled job return as though it had succeeded.
+        self.assertTrue(
+            any(
+                isinstance(stmt, ast.Assign)
+                and any(
+                    _mentions(t, "browser_test_report_cancellation") for t in stmt.targets
+                )
+                for stmt in cancel_handler.body
+            ),
+            "the cancellation must be recorded for the deferred re-raise",
+        )
+        deferred = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Raise)
+            and isinstance(node.exc, ast.Name)
+            and node.exc.id == "browser_test_report_cancellation"
+        ]
+        self.assertEqual(len(deferred), 1, "the deferred cancellation must be re-raised once")
+        # AFTER the teardown, which is the entire point of deferring it. Moving
+        # this above the lifecycle reports, the artifact finalization or the room
+        # cleanup reinstates the abandonment it was written to prevent, and
+        # "a raise exists somewhere" cannot tell the difference.
+        finalizers = _calls_named(tree, "finalize_call_artifacts") + _calls_named(
+            tree, "cleanup_room"
+        )
+        self.assertTrue(finalizers, "expected the teardown calls this must follow")
+        self.assertGreater(
+            deferred[0].lineno,
+            max(call.lineno for call in finalizers),
+            "the deferred cancellation must be re-raised after the teardown finishes",
+        )
+        self.assertFalse(
+            any(_mentions(exc, "BaseException") for exc in caught),
+            "BaseException here would swallow KeyboardInterrupt too",
+        )
+
+    @_worker_source_guard
+    def test_a_browser_test_closes_on_the_first_unrecoverable_error(self) -> None:
+        """Reporting on the close is only prompt if the close is prompt.
+
+        LiveKit absorbs three unrecoverable errors per component before giving
+        up. On a phone call that is right -- a caller is on the line and three
+        more tries beat hanging up on them. On a browser test nobody is on the
+        line and somebody is watching a page, so three silent turns IS the
+        connected-but-mute session. The budget is set to zero for browser tests
+        only; the phone path must keep LiveKit's default.
+        """
+        source = self._production_agent_source()
+
+        self.assertIn("from livekit.agents.voice.agent_session import SessionConnectOptions", source)
+        tree = ast.parse(source)
+
+        # INSIDE the browser-test branch, and nowhere else. Ordering alone is not
+        # enough: `if browser_test is not None: pass` followed by a hoisted
+        # assignment reads almost identically and would put every phone call and
+        # the release canary on a zero error budget. Containment is the claim, so
+        # containment is what gets asserted.
+        options = _calls_named(tree, "SessionConnectOptions")
+        self.assertEqual(len(options), 1, "exactly one place may set the session budget")
+        budget = options[0]
+        self.assertEqual([kw.arg for kw in budget.keywords], ["max_unrecoverable_errors"])
+        zero = budget.keywords[0].value
+        self.assertIsInstance(zero, ast.Constant)
+        # `is 0`, not `== 0`: False compares equal to zero and would read as a
+        # deliberate budget while being a different value entirely.
+        self.assertIs(type(zero.value), int)
+        self.assertEqual(zero.value, 0)
+
+        # POLARITY, exactly. `if browser_test is None:` reads almost the same and
+        # puts every phone call and the release canary on a zero error budget; a
+        # reviewer applied that mutation and an earlier version of this test
+        # stayed green.
+        def _is_browser_test_guard(test: ast.expr) -> bool:
+            return (
+                isinstance(test, ast.Compare)
+                and isinstance(test.left, ast.Name)
+                and test.left.id == "browser_test"
+                and len(test.ops) == 1
+                and isinstance(test.ops[0], ast.IsNot)
+                and isinstance(test.comparators[0], ast.Constant)
+                and test.comparators[0].value is None
+            )
+
+        guards = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.If)
+            and _is_browser_test_guard(node.test)
+            and any(_calls_named(stmt, "SessionConnectOptions") for stmt in node.body)
+        ]
+        self.assertEqual(
+            len(guards), 1, "the zero budget must live under `browser_test is not None`"
+        )
+        # And not in that guard's `else`, which would invert it onto phone calls.
+        self.assertFalse(
+            any(_calls_named(stmt, "SessionConnectOptions") for stmt in guards[0].orelse)
+        )
+        # USED, not merely constructed. A discarded call in a correct branch
+        # leaves browser tests on LiveKit's default of three.
+        def _sets_conn_options(target: ast.expr) -> bool:
+            # The exact key, not merely a subscript of the right dict.
+            # `session_options["wrong_key"] = ...` leaves LiveKit on its default
+            # of three and reads as done.
+            return (
+                isinstance(target, ast.Subscript)
+                and _mentions(target.value, "session_options")
+                and isinstance(target.slice, ast.Constant)
+                and target.slice.value == "conn_options"
+            )
+
+        stored = [
+            stmt
+            for stmt in guards[0].body
+            if isinstance(stmt, ast.Assign)
+            and _calls_named(stmt.value, "SessionConnectOptions")
+            and any(_sets_conn_options(target) for target in stmt.targets)
+        ]
+        self.assertEqual(
+            len(stored), 1, "the budget must be stored as session_options['conn_options']"
+        )
+
+        # A copy, so the shared stack the phone path also receives is not mutated.
+        self.assertIn("dict(stack.session_options)", source)
+
+    @_worker_source_guard
+    def test_the_report_retries_rather_than_counting_attempts_it_never_makes(self) -> None:
+        """Both callers report once, so a per-call counter is a budget nothing draws on.
+
+        The first version incremented an attempt counter and wrote once. After a
+        transient timeout, attempts two and three were unreachable and the
+        browser stayed silent -- the failure this path exists to report, hidden
+        by the code reporting it.
+        """
+        source = self._production_agent_source()
+
+        body = source[source.index("    async def report_browser_test_failure(") :]
+        body = body[: body.index("\n    try:")]
+        self.assertIn("for attempt in range(3):", body)
+        # ONE deadline for the whole thing. Per-attempt timeouts multiply, and
+        # three five-second attempts outlast the teardown's five-second wait --
+        # so the retries would still be writing to a room already being deleted.
+        self.assertIn("BROWSER_TEST_REPORT_BUDGET_SECONDS", body)
+        self.assertIn("remaining = deadline - time.monotonic()", body)
+        self.assertIn("timeout=remaining,", body)
+        self.assertNotIn("except BaseException", body)
+
+        # Cancellation is a caller withdrawing the budget, so it propagates. The
+        # claim is that the handler RE-RAISES, and only the tree can say that:
+        # searching the handler text for "raise" is satisfied by a comment, by an
+        # identifier like `reraise`, or by a `return` sitting beside either.
+        reporter = next(
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "report_browser_test_failure"
+        )
+        cancel_handlers = [
+            handler
+            for node in ast.walk(reporter)
+            if isinstance(node, ast.Try)
+            for handler in node.handlers
+            if handler.type is not None and _mentions(handler.type, "CancelledError")
+        ]
+        self.assertEqual(len(cancel_handlers), 1, "one explicit cancellation handler")
+        self.assertTrue(
+            all(
+                isinstance(stmt, ast.Raise) and stmt.exc is None
+                for stmt in cancel_handlers[0].body
+            ),
+            "the handler must do nothing but re-raise, bare -- `raise RuntimeError(...)` "
+            "is a Raise too and stops being cancellation",
+        )
+        # The loop must exit on the FIRST success, not keep rewriting.
+        self.assertIn("browser_test_failure_reported = True", body)
+        self.assertLess(
+            body.index("browser_test_failure_reported = True"),
+            body.index("finally:"),
+            "success must be recorded inside the loop, before the guard is released",
+        )
+        self.assertIn("return", body[body.index("browser_test_failure_reported = True") :])
+
+    def test_pre_media_teardown_accepts_the_tracked_task_livekit_actually_returns(self) -> None:
+        """``ctx.delete_room`` is passed straight in, and it does not return a coroutine.
+
+        LiveKit registers the room delete with its own pending-task tracker and
+        hands back that Task. The test above supplies plain ``async def``
+        factories, which is not the shape production uses, so it kept passing
+        while every real pre-media rejection died inside the teardown with
+        ``TypeError: a coroutine was expected``. The call then kept its ringing
+        SIP leg and its wallet reservation, and reported no failure at all.
+        """
+
+        async def scenario() -> tuple[dict[str, object], list[str]]:
+            events: list[str] = []
+
+            class _Adapter:
+                def report_failed_before_media(self, **_kwargs):
+                    events.append("sip_failed")
+                    return {"canonical_type": "call.failed", "billing": {"status": "released"}}
+
+            class _Call:
+                def cleanup(self, **_kwargs):
+                    events.append("call_cleaned")
+
+            async def _delete() -> None:
+                events.append("room_deleted")
+
+            def delete_room():
+                # Exactly what JobContext.delete_room does: schedule it, track
+                # the task, return the task.
+                return asyncio.ensure_future(_delete())
+
+            async def remove_participant() -> None:
+                events.append("participant_removed")
+
+            result = await terminate_pre_media_call(
+                call=_Call(),
+                adapter=_Adapter(),
+                call_id="call_1",
+                reason="component configuration rejected",
+                remove_participant=remove_participant,
+                delete_room=delete_room,
+            )
+            return result, events
+
+        result, events = asyncio.run(scenario())
+
+        self.assertIn("room_deleted", events)
+        self.assertIn("participant_removed", events)
+        self.assertIn("sip_failed", events)
+        self.assertTrue(result["room_terminated"])
+        self.assertTrue(result["participant_terminated"])
         self.assertTrue(result["lifecycle_recorded"])
 
     def test_cancelled_pre_media_waiter_cannot_abandon_cleanup(self) -> None:
@@ -759,10 +1371,10 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         self.assertEqual(labels, {"stt": "nova-3", "llm": "gemini-2.5-flash-lite", "tts": "eleven_v3"})
 
     def test_sinhala_model_labels_follow_the_registry_that_actually_runs(self) -> None:
-        # si-LK routes STT to Google Chirp 2 and TTS to Gemini-TTS. The labels
+        # si-LK routes STT to Google streaming STT and TTS to Gemini-TTS. The labels
         # must track the registry rather than assuming the ElevenLabs default.
         config = _config(language="si")
-        config["transcriber"] = {"registry_name": "google", "model": "chirp_2", "language": "si"}
+        config["transcriber"] = {"registry_name": "google", "model": "command_and_search", "language": "si"}
         config["voice"] = {
             "registry_name": "gemini_tts",
             "model": "gemini-2.5-flash-preview-tts",
@@ -771,7 +1383,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         }
         labels = component_model_labels(profile_from_realtime_config(config))
 
-        self.assertEqual(labels["stt"], "chirp_2")
+        self.assertEqual(labels["stt"], "command_and_search")
         self.assertEqual(labels["tts"], "gemini-2.5-flash-preview-tts")
 
     def test_realtime_config_is_the_only_semantic_stack_source(self) -> None:
@@ -800,7 +1412,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
             "first_message": "Ayubowan!",
             "tools": [],
             "recording_enabled": True,
-            "transcriber": {"registry_name": "google", "model": "chirp_2", "language": "si"},
+            "transcriber": {"registry_name": "google", "model": "command_and_search", "language": "si"},
             "model": {"registry_name": "gemini", "model": "gemini-2.5-flash-lite"},
             "voice": {
                 "registry_name": "gemini_tts",
@@ -817,6 +1429,15 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         self.assertEqual(profile.stt_registry, "google")
         self.assertEqual(profile.tts_registry, "gemini_tts")
         self.assertEqual(profile.voice_id, "Kore")
+
+        batch_only = dict(config)
+        batch_only["transcriber"] = {
+            "registry_name": "google",
+            "model": "chirp_2",
+            "language": "si",
+        }
+        with self.assertRaisesRegex(ProductionConfigurationError, "streaming"):
+            profile_from_realtime_config(batch_only)
 
         # Deepgram cannot serve si-LK STT at all.
         deepgram_stt = dict(config)

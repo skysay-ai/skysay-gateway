@@ -27,7 +27,7 @@ RUN python -m livekit.agents download-files
 USER root
 COPY agent/production_agent.py agent/outbound_worker.py agent/reconcile_sessions.py agent/provision_selfhost.py /app/
 COPY call_telemetry.py control_plane.py demo.py evidence_contract.py livekit_evidence.py prewarm.py production.py reconciliation.py /app/
-COPY component_billing.py component_credentials.py workflow_turns.py native_tts_usage.py soniox_usage.py soniox_tts.py fish_audio_tts.py /app/
+COPY component_billing.py component_credentials.py workflow_turns.py native_tts_usage.py gemini_tts_usage.py gemini_tts.py soniox_usage.py soniox_tts.py fish_audio_tts.py /app/
 COPY capabilities /app/capabilities
 COPY agent/carrier-entrypoint.sh /app/carrier-entrypoint.sh
 RUN chmod 0555 /app/carrier-entrypoint.sh

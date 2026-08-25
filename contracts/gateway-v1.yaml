@@ -31,17 +31,20 @@ info:
     check passes when the principal holds `*`, the exact scope, or the
     `<namespace>:*` wildcard.
 
-    The self-hosted stack uses TWO credentials, both sent as
-    `Authorization: Bearer`:
+    An inbound self-hosted stack uses ONE credential, sent as
+    `Authorization: Bearer`: the scoped **per-gateway token** (`tgw_...`,
+    `OPENPHONEX_GATEWAY_API_TOKEN`). It covers gateway-deployment operations —
+    health/lifecycle reporting, number-rules sync, realtime-config reads and
+    artifact upload — plus inbound call routing and MCP `tools/list` schema
+    discovery. The organization it acts in is derived server-side from the
+    token, never from the request body, and `tools/list` is the only MCP method
+    it may call.
 
-    * a scoped **per-gateway token** (`tgw_...`, `OPENPHONEX_GATEWAY_API_TOKEN`)
-      for gateway-deployment operations — health/lifecycle reporting,
-      realtime-config reads, and artifact upload (see the token endpoints); and
-    * an **organization-scoped worker token** (`OPENPHONEX_WORKER_API_TOKEN`)
-      for inbound call routing and MCP tool invocation.
-
-    Protect the worker token: it carries organization-wide authority (see
-    SECURITY.md). Rotate either token via the token endpoints on compromise.
+    An **organization-scoped worker token** (`OPENPHONEX_WORKER_API_TOKEN`) is
+    still accepted where an install sets one, and is required by the optional
+    outbound-dial profile. Protect it: it carries organization-wide authority
+    (see SECURITY.md). Rotate either token via the token endpoints on
+    compromise.
 
     ## Audio contract
 
@@ -122,6 +125,11 @@ paths:
         Scope `gateways:read`. `organization_id` query parameter is checked against the
         principal. NOTE (as-built): list rows are enriched with `gateway_health` but do
         NOT include the `pricing` object that single-resource GET adds.
+        `gateway_health.status` is `connected` once the control plane has observed this
+        deployment's own `tgw_` token authenticate (`gateway_health.control_plane_last_seen_at`,
+        derived from `gateway_tokens.last_used_at`). A self-hosted gateway posts no
+        health report, so its readiness comes from that outbound contact, not from
+        health-check artefacts; an explicitly FAILED check still overrides it.
       x-required-scopes: ["gateways:read"]
       parameters:
         - $ref: "#/components/parameters/organizationId"
@@ -171,10 +179,12 @@ paths:
         Auth today: org API key with scope `gateways:write` (same scope
         as registration - there is no narrower reporting scope yet; see proposed
         `gateways:report`). The report is stored verbatim as `last_health_status`; the
-        server derives `status` / `next_step` from named checks (api_health,
-        media_health, voice_gateway_health, realtime_worker_health,
-        storage) and writes an audit event `gateway.health_reported`. Returns the full
-        updated deployment resource.
+        server derives `status` / `next_step` from EXPLICIT check FAILURES (api_health,
+        media_health, voice_gateway_health, realtime_worker_health, storage) plus the
+        last test result and observed gateway-token contact, and writes an audit event
+        `gateway.health_reported`. An absent check is "no evidence" and never blocks
+        readiness - the production self-host package ships no health-report producer.
+        Returns the full updated deployment resource.
       x-required-scopes: ["gateways:write"]
       x-json-schema:
         request: contracts/schemas/gateway_health_report_request.json
@@ -234,6 +244,65 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GatewayCallLifecycleEventResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /v1/gateway-deployments/{gateway_id}/outbound-calls:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: originateGatewayOutboundCall
+      summary: Admit an outbound call this deployment will dial itself
+      description: |
+        For a self-hosted deployment whose `outbound_execution_mode` is `local`.
+        The control plane runs the SAME outbound admission a remote
+        `POST /v1/calls` runs -- the outbound authorization decision, the wallet
+        reserve, the call record and the bounded execution slot -- and then, in
+        place of enqueueing a `call.outbound_originate` worker job, mints the
+        single-use `tca_` call authorization bound to
+        (gateway, organization, from-number, to-number, call) and returns it
+        with a dial plan.
+
+        The organization and project come from the verified gateway deployment
+        row, never from this body: a named `organization_id` or `project_id`
+        may only AGREE with them. The caller ID may be named as an E.164
+        `from_phone_number` (resolved inside that project) or as a
+        `from_number_id`; either way it must be an active number of the
+        deployment's own project.
+
+        Because there is no job to retry, this route refuses BEFORE the wallet
+        reserve when live calling is disabled. A refused authorization returns
+        `authorized: false` with no token, and a replayed `idempotency_key`
+        returns the original call with no token -- re-issuing a media token
+        without a fresh authorization decision would bypass policy.
+
+        A deployment in the default `queue` mode is refused here; its calls are
+        placed from the worker queue as before. Conversely, once an organization
+        has a `local`-mode deployment and no `queue`-mode deployment left, a
+        remote `POST /v1/calls` for its numbers fails closed rather than
+        enqueueing a job nothing would claim. Job claims are per-organization,
+        so one remaining queue-mode deployment keeps every project working, and
+        the mode switch itself is refused in either direction while calls are
+        still in flight rather than abandoning them.
+      x-required-scopes: ["calls:authorize"]
+      x-json-schema:
+        request: contracts/schemas/gateway_outbound_call_request.json
+        response: contracts/schemas/gateway_outbound_call_response.json
+      parameters:
+        - $ref: "#/components/parameters/gatewayId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayOutboundCallRequest"
+      responses:
+        "201":
+          description: Admission ran. `authorized` says whether a token was minted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayOutboundCallResponse"
         default:
           $ref: "#/components/responses/Error"
 
@@ -793,6 +862,21 @@ components:
           Default allowlist for gateways: call.artifact_import, call.inbound_route,
           gateway.health_probe. No claim/complete/fail/retry rights, unlike today's
           worker_jobs:write.
+
+          AS-BUILT ADDITION: the `call.inbound_route` allowlist entry, together
+          with this scope, is also what admits a gateway token to
+          `POST /v1/calls/inbound/route` and to the call-bound
+          `GET /v1/calls/{call_id}/realtime-config` for the resulting INBOUND
+          call. The organization is taken from the token row, never from the
+          request body, and an outbound call still requires a consumed
+          single-call authorization. Minting a token whose kind_allowlist omits
+          `call.inbound_route` is therefore how an operator stops one
+          deployment answering calls without touching the rest of the
+          workspace.
+
+          A gateway token is additionally admitted to `POST /mcp` for the
+          `tools/list` method ONLY (the static tool catalogue; no workspace row
+          is read). Every other MCP method, `tools/call` included, is refused.
         artifacts:upload: >-
           PROPOSED. Upload artifacts to calls in the token's organization via the
           multipart endpoint. No read access to other recordings.
@@ -1009,6 +1093,37 @@ components:
         billing: {type: [object, "null"]}
       required: [organization_id, duplicate, canonical_type, event, call, billing]
 
+    GatewayOutboundCallRequest:
+      type: object
+      x-json-schema-file: gateway_outbound_call_request.json
+      properties:
+        to: {type: string}
+        from_phone_number: {type: string}
+        from_number_id: {type: string}
+        agent_id: {type: string}
+        agent_endpoint_id: {type: string}
+        purpose: {type: string}
+        recipient_type: {type: string}
+        relationship: {type: string}
+        user_authorization: {type: object}
+        recording_enabled: {type: boolean}
+        call_context: {type: object}
+        external_reference: {type: string}
+        external_group_reference: {type: string}
+        idempotency_key: {type: string}
+      required: [to]
+
+    GatewayOutboundCallResponse:
+      type: object
+      x-json-schema-file: gateway_outbound_call_response.json
+      properties:
+        gateway_id: {type: string}
+        authorized: {type: boolean}
+        authorization: {type: [object, "null"]}
+        dial_plan: {type: [object, "null"]}
+        call: {type: object}
+      required: [gateway_id, authorized, authorization, dial_plan, call]
+
     WorkerJobCreateRequest:
       type: object
       x-json-schema-file: worker_job_create_request.json
@@ -1142,6 +1257,14 @@ components:
         id: {type: string}
         number_route_id: {type: string}
         phone_number_id: {type: string}
+        e164:
+          type: string
+          description: >-
+            The dialled number this rule applies to. Present in the gateway
+            sync document only (a gateway token holds no numbers:read, so
+            without it a deployment can see which agent each rule points at
+            but never which DID). Omitted from the customer number-rules
+            resource, which is addressed by number id.
         organization_id: {type: string}
         project_id: {type: string}
         status: {type: string}

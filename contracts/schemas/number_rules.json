@@ -16,6 +16,10 @@
     "phone_number_id": {
       "type": "string"
     },
+    "e164": {
+      "type": "string",
+      "description": "The dialled number this rule applies to. Present in the gateway sync document (GET /v1/gateway-deployments/{id}/number-rules) only; the customer resource is addressed by number id and omits it."
+    },
     "organization_id": {
       "type": "string"
     },

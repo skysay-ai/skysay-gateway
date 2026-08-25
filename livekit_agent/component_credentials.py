@@ -40,13 +40,21 @@ _ENV_BY_COMPONENT = {
     ),
 }
 
-_SCOPED_BYOK_VARIABLES = (
+# Names that exist only inside one call's overlay. They are also unset by the
+# worker container entrypoint (agent/carrier-entrypoint.sh) so an operator who
+# copies one into the deployment's environment file cannot make every call on
+# that provider look like a corrupt lease. A test asserts the entrypoint's
+# unset list equals this tuple, so adding a provider here means adding it
+# there in the same change.
+_SCOPED_COMPONENT_VARIABLES = (
     "SONIOX_STT_API_KEY",
     "SONIOX_TTS_API_KEY",
     "OPENPHONEX_BYOK_SONIOX_STT",
     "OPENPHONEX_BYOK_SONIOX_TTS",
     "FISH_AUDIO_TTS_API_KEY",
     "OPENPHONEX_BYOK_FISHAUDIO_TTS",
+    "GEMINI_TTS_API_KEY",
+    "OPENPHONEX_PLATFORM_GEMINI_TTS",
 )
 
 
@@ -94,8 +102,31 @@ def runtime_environ_with_component_credentials(
     # These names exist only for one call's in-memory overlay.  Ignoring any
     # inherited process value prevents an accidental deployment variable from
     # changing a managed component or pretending a BYOK selection was leased.
-    for variable in _SCOPED_BYOK_VARIABLES:
+    for variable in _SCOPED_COMPONENT_VARIABLES:
         overlay.pop(variable, None)
+    # Capture the platform Gemini TTS key before an independently selected
+    # Gemini LLM BYOK lease replaces GEMINI_API_KEY. This keeps component
+    # ownership exact in mixed calls without changing the platform's generic
+    # key for the LLM or unrelated workers.
+    selected_tts = selections.get("tts")
+    if (
+        isinstance(selected_tts, dict)
+        and str(selected_tts.get("provider") or "").strip().lower() == "gemini"
+    ):
+        # Gemini TTS has no supported customer-BYOK adapter. A malformed
+        # snapshot must fail before an independently leased Gemini LLM key
+        # can become an accidental fallback for platform-managed synthesis.
+        if selected_tts.get("credential_source") != "platform_managed":
+            raise ComponentCredentialContractError(
+                "Gemini TTS must use platform-managed credentials"
+            )
+        platform_gemini_tts_key = str(
+            base_environ.get("GEMINI_API_KEY") or base_environ.get("GOOGLE_API_KEY") or ""
+        )
+        if not platform_gemini_tts_key:
+            raise ComponentCredentialContractError("platform Gemini TTS key is unavailable")
+        overlay["GEMINI_TTS_API_KEY"] = platform_gemini_tts_key
+        overlay["OPENPHONEX_PLATFORM_GEMINI_TTS"] = "1"
     for component, item in selected_byok.items():
         provider = str(item.get("provider") or "").strip().lower()
         mapping = _ENV_BY_COMPONENT.get((component, provider))

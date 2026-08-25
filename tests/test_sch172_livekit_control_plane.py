@@ -122,6 +122,110 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         self.assertTrue(session.media_admitted)
         self.assertEqual(session.audit_events[:4], ["authorization_allowed", "realtime_config_loaded", "authorization_consumed", "media_admitted"])
 
+    def _admitted(self, **overrides) -> dict:
+        response = {
+            "authorized": True,
+            "gateway_id": "gateway_1",
+            "authorization": {
+                "id": "tca_row",
+                "token": "tca_once",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "call_id": "call_1",
+            },
+            "dial_plan": {
+                "call_id": "call_1",
+                "agent_id": "agent_1",
+                "number_id": "number_1",
+                "from_phone_number": "+15551230000",
+                "to_phone_number": "+37255509999",
+                "outbound_trunk_name": "openphonex-didlogic-pa_1",
+            },
+            "call": {"id": "call_1", "status": "dialing"},
+        }
+        response.update(overrides)
+        return response
+
+    def test_local_admission_returns_a_dial_plan_and_a_single_use_token(self) -> None:
+        transport = FakeTransport([self._admitted(), _config()])
+        adapter = self._adapter(transport)
+        dial_plan, token = adapter.admit_local_outbound(
+            to_e164="+37255509999", from_phone_number="+15551230000"
+        )
+
+        self.assertEqual(token, "tca_once")
+        self.assertEqual(dial_plan["call_id"], "call_1")
+        self.assertEqual(dial_plan["outbound_trunk_name"], "openphonex-didlogic-pa_1")
+        method, path, body = transport.calls[0]
+        self.assertEqual((method, path), ("POST", "/v1/gateway-deployments/gateway_1/outbound-calls"))
+        # The workspace is never named by the box: the control plane reads it
+        # from this deployment's own token.
+        self.assertNotIn("organization_id", body)
+        self.assertNotIn("project_id", body)
+        self.assertEqual(body["to"], "+37255509999")
+
+        session = adapter.session_for_local_outbound(dial_plan, token)
+        self.assertFalse(session.media_admitted)
+        self.assertEqual(session.call_authorization_token, "tca_once")
+        self.assertEqual(session.to_e164, "+37255509999")
+        self.assertEqual(
+            [(method, path) for method, path, _ in transport.calls],
+            [
+                ("POST", "/v1/gateway-deployments/gateway_1/outbound-calls"),
+                ("GET", "/v1/agents/agent_1/realtime-config"),
+            ],
+        )
+
+    def test_local_admission_refuses_a_dial_plan_for_another_destination(self) -> None:
+        transport = FakeTransport([self._admitted()])
+        with self.assertRaisesRegex(ControlPlaneRejected, "different destination"):
+            self._adapter(transport).admit_local_outbound(
+                to_e164="+37255500000", from_phone_number="+15551230000"
+            )
+
+    def test_local_admission_refuses_a_dial_plan_for_another_caller_id(self) -> None:
+        transport = FakeTransport([self._admitted()])
+        with self.assertRaisesRegex(ControlPlaneRejected, "different caller id"):
+            self._adapter(transport).admit_local_outbound(
+                to_e164="+37255509999", from_phone_number="+15559999999"
+            )
+        transport = FakeTransport([self._admitted()])
+        with self.assertRaisesRegex(ControlPlaneRejected, "different caller id"):
+            self._adapter(transport).admit_local_outbound(
+                to_e164="+37255509999", from_number_id="number_2"
+            )
+
+    def test_local_admission_refuses_a_token_bound_to_another_call(self) -> None:
+        response = self._admitted()
+        response["authorization"]["call_id"] = "call_other"
+        transport = FakeTransport([response])
+        with self.assertRaisesRegex(ControlPlaneRejected, "not bound to the admitted call"):
+            self._adapter(transport).admit_local_outbound(
+                to_e164="+37255509999", from_phone_number="+15551230000"
+            )
+
+    def test_local_admission_refuses_an_unauthorized_or_tokenless_answer(self) -> None:
+        transport = FakeTransport(
+            [{"authorized": False, "authorization": None, "dial_plan": None, "call": {"status": "policy_blocked"}}]
+        )
+        with self.assertRaisesRegex(ControlPlaneRejected, "did not authorize origination"):
+            self._adapter(transport).admit_local_outbound(
+                to_e164="+37255509999", from_phone_number="+15551230000"
+            )
+
+        response = self._admitted()
+        response["authorization"] = {"id": "tca_row", "token": "", "call_id": "call_1"}
+        transport = FakeTransport([response])
+        with self.assertRaisesRegex(ControlPlaneRejected, "omitted its single-use token"):
+            self._adapter(transport).admit_local_outbound(
+                to_e164="+37255509999", from_phone_number="+15551230000"
+            )
+
+    def test_local_admission_needs_a_caller_id_before_it_asks_for_anything(self) -> None:
+        transport = FakeTransport([])
+        with self.assertRaisesRegex(ControlPlaneRejected, "needs a caller id"):
+            self._adapter(transport).admit_local_outbound(to_e164="+37255509999")
+        self.assertEqual(transport.calls, [])
+
     def test_platform_release_canary_session_is_non_billing_and_non_customer_state(self) -> None:
         transport = FakeTransport(
             [

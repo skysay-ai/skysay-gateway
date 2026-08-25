@@ -25,7 +25,8 @@
 #   7. livekit-server answers on http://127.0.0.1:7880
 #   8. the agent registered with LiveKit and prewarmed (log evidence)
 #   9. the control plane accepts the gateway token (number-rules read)
-#  10. the control plane accepts the worker token (MCP tools/list)
+#  10. the same gateway token is accepted on the OTHER surface a call needs
+#      (MCP tools/list), plus any legacy organization worker key still set
 #  11. sessions/ + call-evidence/ are writable by the in-container agent uid
 #
 # Exit code 0 = every hard check passed -> place a test call to your DID.
@@ -312,11 +313,54 @@ else
   pass "SIP_REGISTRATION_* is confined to .env.registrar"
 fi
 
+# The bootstrap key must never have reached this file. selfhost-bootstrap.sh
+# takes it as an environment variable (or reads it with no echo) precisely so
+# there is nothing on the box to delete afterwards; a line here would quietly
+# turn "revoke it when you are done" into a secret nobody remembers to remove,
+# and it is an ORGANISATION-scoped key, which is the blast radius the
+# deployment-bound token exists to avoid.
+STRAY_BOOTSTRAP_KEY="$(grep -cE '^[[:space:]]*(export[[:space:]]+)?OPENPHONEX_BOOTSTRAP_API_KEY[[:space:]]*=' .env.livekit 2>/dev/null || true)"
+if [ "${STRAY_BOOTSTRAP_KEY:-0}" -gt 0 ] 2>/dev/null; then
+  fail "the bootstrap key is not stored on this host" \
+    "OPENPHONEX_BOOTSTRAP_API_KEY is assigned in .env.livekit. Nothing reads it from there -- it is an organization-scoped key that only selfhost-bootstrap.sh needs, once, from the environment. Delete the line and revoke that key in the dashboard."
+else
+  pass "the bootstrap key is not stored on this host"
+fi
+
+# gateway-state.json records which deployment this box registered. If it and
+# .env.livekit name different gateways, one of them is a leftover from another
+# install: the stack would run as one deployment while a re-run of the
+# bootstrap repaired the other, and nothing else in this script would notice.
+if [ -f gateway-state.json ]; then
+  STATE_GATEWAY_ID="$(python3 - <<'"'"'PY'"'"' 2>/dev/null || true
+import json
+try:
+    with open("gateway-state.json", encoding="utf-8") as handle:
+        document = json.load(handle)
+except (OSError, ValueError):
+    document = {}
+print(str((document or {}).get("gateway_id") or ""))
+PY
+)"
+  if [ -z "$STATE_GATEWAY_ID" ]; then
+    fail "gateway-state.json agrees with .env.livekit" \
+      "gateway-state.json is unreadable or names no gateway_id. Delete it and re-run selfhost-bootstrap.sh, which will adopt this deployment from .env.livekit."
+  elif [ -z "${OPENPHONEX_GATEWAY_ID:-}" ]; then
+    fail "gateway-state.json agrees with .env.livekit" \
+      "gateway-state.json names $STATE_GATEWAY_ID but .env.livekit sets no OPENPHONEX_GATEWAY_ID. Re-run selfhost-bootstrap.sh to fill it in."
+  elif [ "$STATE_GATEWAY_ID" != "$OPENPHONEX_GATEWAY_ID" ]; then
+    fail "gateway-state.json agrees with .env.livekit" \
+      "gateway-state.json names $STATE_GATEWAY_ID but .env.livekit runs as $OPENPHONEX_GATEWAY_ID. One is a leftover from another install; delete gateway-state.json and re-run selfhost-bootstrap.sh to adopt the deployment this stack actually uses."
+  else
+    pass "gateway-state.json agrees with .env.livekit ($STATE_GATEWAY_ID)"
+  fi
+fi
+
 # Variables the stack cannot start without, whatever the agent is configured to
 # say. Provider keys are deliberately NOT in this list -- see below.
 REQUIRED_VARS="LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET \
 OPENPHONEX_CONTROL_PLANE_URL OPENPHONEX_GATEWAY_ID OPENPHONEX_GATEWAY_API_TOKEN \
-OPENPHONEX_WORKER_API_TOKEN OPENPHONEX_ORGANIZATION_ID SCH236_TEST_DID_E164"
+OPENPHONEX_ORGANIZATION_ID SCH236_TEST_DID_E164"
 MISSING=""
 for v in $REQUIRED_VARS; do
   configured "$v" || MISSING="$MISSING $v"
@@ -472,7 +516,7 @@ if [ "$GEMINI_SET" -eq 0 ]; then
     "every supported stack resolves its model to Gemini, and Gemini TTS reuses the same key"
 elif [ "$STT_SET" -eq 0 ]; then
   fail "an STT credential is set" \
-    "set DEEPGRAM_API_KEY, or GOOGLE_APPLICATION_CREDENTIALS/_JSON for the Google chirp_2 path${STT_REGISTRY_HINT}; no supported stack transcribes without one"
+    "set DEEPGRAM_API_KEY, or GOOGLE_APPLICATION_CREDENTIALS/_JSON for a Google Cloud STT path${STT_REGISTRY_HINT}; no supported stack transcribes without one"
 else
   # Deliberately the WEAKER claim, and it says so. This proves a runnable stack
   # is *possible* with the keys present; it cannot prove your agent's published
@@ -963,26 +1007,52 @@ elif [ "$CPU_OK" = 1 ]; then
   fail "control plane accepts the gateway token" "OPENPHONEX_GATEWAY_ID / OPENPHONEX_GATEWAY_API_TOKEN not both set"
 fi
 
-# --- 10. control plane authenticates the WORKER token (MCP) -------------------
-# NOTE: this proves the worker token AUTHENTICATES against the control plane
-# (MCP tools/list). It does NOT prove the token carries the calls/route scope
-# the first inbound call needs (POST /v1/calls/inbound/route) — the control
-# plane exposes no non-mutating probe for that scope, so a 200 here means
-# "authenticates", not "call-ready". The first real call is the scope check.
-if [ "$CPU_OK" = 1 ] && [ -n "${OPENPHONEX_WORKER_API_TOKEN:-}" ]; then
-  MCP_CODE="$(bearer_curl "${OPENPHONEX_WORKER_API_TOKEN}" ${CP_NOPROXY[@]+"${CP_NOPROXY[@]}"} \
+# --- 10. the gateway token is accepted on the SECOND surface a call needs -----
+# A call needs this one token on two different control-plane surfaces: the
+# number-rules sync proved in step 9, and the MCP tool-schema catalogue the
+# worker hands its model. A token can pass one and fail the other (narrowed
+# scopes, a deployment/organization mismatch), so proving both is what makes
+# this gate mean "the credential this stack runs on works" rather than "some
+# credential works".
+#
+# NOTE: neither check proves the INBOUND-ROUTE authority itself — the control
+# plane exposes no non-mutating probe for it, so a 200 here means
+# "authenticates", not "call-ready". The first real call is that check.
+if [ "$CPU_OK" = 1 ] && [ -n "${OPENPHONEX_GATEWAY_API_TOKEN:-}" ]; then
+  MCP_CODE="$(bearer_curl "${OPENPHONEX_GATEWAY_API_TOKEN}" ${CP_NOPROXY[@]+"${CP_NOPROXY[@]}"} \
     -s -o /dev/null -m 10 -w '%{http_code}' -X POST \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","id":"selfhost-smoketest","method":"tools/list"}' \
     "${CPU%/}/mcp" 2>/dev/null || true)"
   case "$MCP_CODE" in
-    200) pass "control plane authenticates the worker token (MCP tools/list HTTP 200; call/route scope is exercised by the first real call)" ;;
-    401|403) fail "control plane authenticates the worker token" "HTTP $MCP_CODE — the worker credential was not accepted (wrong, revoked, expired, or a tgw_ token pasted here); MCP tools/list proves authentication only, while the first inbound route checks OPENPHONEX_ORGANIZATION_ID against the tai_ key and DID" ;;
+    200) pass "control plane accepts the gateway token for tool schemas (MCP tools/list HTTP 200; call/route authority is exercised by the first real call)" ;;
+    401|403) fail "control plane accepts the gateway token for tool schemas" "HTTP $MCP_CODE from ${CPU%/}/mcp — the gateway token was not accepted here even though step 9 may have passed. A control plane older than the one-credential release still refuses tgw_ on /mcp: either upgrade it, or set OPENPHONEX_WORKER_API_TOKEN to an organization-scoped tai_ key as before" ;;
     000|"") fail "MCP endpoint is reachable" "no HTTP response from ${CPU%/}/mcp" ;;
-    *) fail "control plane authenticates the worker token" "unexpected HTTP $MCP_CODE from ${CPU%/}/mcp" ;;
+    *) fail "control plane accepts the gateway token for tool schemas" "unexpected HTTP $MCP_CODE from ${CPU%/}/mcp" ;;
   esac
 elif [ "$CPU_OK" = 1 ]; then
-  fail "control plane authenticates the worker token" "OPENPHONEX_WORKER_API_TOKEN not set"
+  fail "control plane accepts the gateway token for tool schemas" "OPENPHONEX_GATEWAY_API_TOKEN not set"
+fi
+
+# --- 10b. an organization worker key, only if one is still set ---------------
+# The baseline install no longer sets this. It is read ONLY by the legacy
+# `queue` outbound mode's job-claiming worker, and an install may still carry
+# it, so when it IS present it has to work: a stale or revoked tai_ key sitting
+# in this file is how queue-mode outbound dialling fails after everything else
+# reports green. A deployment in `local` outbound mode needs no such key --
+# deleting the line is what narrows the box.
+if [ "$CPU_OK" = 1 ] && [ -n "${OPENPHONEX_WORKER_API_TOKEN:-}" ]; then
+  WORKER_MCP_CODE="$(bearer_curl "${OPENPHONEX_WORKER_API_TOKEN}" ${CP_NOPROXY[@]+"${CP_NOPROXY[@]}"} \
+    -s -o /dev/null -m 10 -w '%{http_code}' -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":"selfhost-smoketest-worker","method":"tools/list"}' \
+    "${CPU%/}/mcp" 2>/dev/null || true)"
+  case "$WORKER_MCP_CODE" in
+    200) pass "control plane authenticates the organization worker key still set here (MCP tools/list HTTP 200)" ;;
+    401|403) fail "control plane authenticates the organization worker key still set here" "HTTP $WORKER_MCP_CODE — OPENPHONEX_WORKER_API_TOKEN is wrong, revoked or expired. Only the legacy queue outbound mode reads it, so either replace it, or switch this deployment to outbound_execution_mode=local and delete the line; leaving a dead key here breaks --profile outbound" ;;
+    000|"") fail "MCP endpoint is reachable" "no HTTP response from ${CPU%/}/mcp" ;;
+    *) fail "control plane authenticates the organization worker key still set here" "unexpected HTTP $WORKER_MCP_CODE from ${CPU%/}/mcp" ;;
+  esac
 fi
 
 # --- 11. artifact directories (REAL write probe as the agent uid) -------------

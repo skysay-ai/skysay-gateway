@@ -1,16 +1,16 @@
 {
-  "file_count": 122,
+  "file_count": 127,
   "files": {
     ".github/workflows/ci.yml": {
       "bytes": 2044,
       "origin": "generate:github-ci.yml"
     },
     ".gitignore": {
-      "bytes": 621,
+      "bytes": 876,
       "origin": "generate:gitignore"
     },
     "AGENTS.md": {
-      "bytes": 3153,
+      "bytes": 5318,
       "origin": "generate:AGENTS.md"
     },
     "CONTRIBUTING.md": {
@@ -18,7 +18,7 @@
       "origin": "generate:CONTRIBUTING.md"
     },
     "INSTALL.md": {
-      "bytes": 26973,
+      "bytes": 31747,
       "origin": "generate:INSTALL.md"
     },
     "LICENSE": {
@@ -34,7 +34,7 @@
       "origin": "generate:README.md"
     },
     "SECURITY.md": {
-      "bytes": 5913,
+      "bytes": 8003,
       "origin": "generate:SECURITY.md"
     },
     "THIRD_PARTY_LICENSES.md": {
@@ -46,7 +46,7 @@
       "origin": "generate:TRADEMARK.md"
     },
     "contracts/gateway-v1.yaml": {
-      "bytes": 50092,
+      "bytes": 56380,
       "origin": "include:contracts/gateway-v1.yaml",
       "scrubbed": true,
       "spdx": "comment"
@@ -105,8 +105,20 @@
       "scrubbed": true,
       "spdx": "json"
     },
+    "contracts/schemas/gateway_outbound_call_request.json": {
+      "bytes": 1101,
+      "origin": "include:contracts/schemas",
+      "scrubbed": true,
+      "spdx": "json"
+    },
+    "contracts/schemas/gateway_outbound_call_response.json": {
+      "bytes": 723,
+      "origin": "include:contracts/schemas",
+      "scrubbed": true,
+      "spdx": "json"
+    },
     "contracts/schemas/number_rules.json": {
-      "bytes": 3730,
+      "bytes": 3992,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
@@ -169,21 +181,21 @@
       "spdx": "py"
     },
     "livekit_agent/agent/Dockerfile": {
-      "bytes": 1856,
+      "bytes": 1890,
       "origin": "generate:Dockerfile.livekit-agent"
     },
     "livekit_agent/agent/carrier-entrypoint.sh": {
-      "bytes": 320,
+      "bytes": 3782,
       "origin": "include:livekit_agent/agent/carrier-entrypoint.sh",
       "spdx": "comment"
     },
     "livekit_agent/agent/outbound_worker.py": {
-      "bytes": 19257,
+      "bytes": 28747,
       "origin": "include:livekit_agent/agent/outbound_worker.py",
       "spdx": "py"
     },
     "livekit_agent/agent/production_agent.py": {
-      "bytes": 45995,
+      "bytes": 56769,
       "origin": "include:livekit_agent/agent/production_agent.py",
       "spdx": "py"
     },
@@ -226,22 +238,22 @@
       "origin": "include:livekit_agent/capabilities/schema.json"
     },
     "livekit_agent/component_billing.py": {
-      "bytes": 18673,
+      "bytes": 19892,
       "origin": "include:livekit_agent/component_billing.py",
       "spdx": "py"
     },
     "livekit_agent/component_credentials.py": {
-      "bytes": 5744,
+      "bytes": 7498,
       "origin": "include:livekit_agent/component_credentials.py",
       "spdx": "py"
     },
     "livekit_agent/control_plane.py": {
-      "bytes": 65595,
+      "bytes": 72018,
       "origin": "include:livekit_agent/control_plane.py",
       "spdx": "py"
     },
     "livekit_agent/demo.py": {
-      "bytes": 29910,
+      "bytes": 34043,
       "origin": "include:livekit_agent/demo.py",
       "spdx": "py"
     },
@@ -253,6 +265,16 @@
     "livekit_agent/fish_audio_tts.py": {
       "bytes": 7333,
       "origin": "include:livekit_agent/fish_audio_tts.py",
+      "spdx": "py"
+    },
+    "livekit_agent/gemini_tts.py": {
+      "bytes": 9047,
+      "origin": "include:livekit_agent/gemini_tts.py",
+      "spdx": "py"
+    },
+    "livekit_agent/gemini_tts_usage.py": {
+      "bytes": 3557,
+      "origin": "include:livekit_agent/gemini_tts_usage.py",
       "spdx": "py"
     },
     "livekit_agent/livekit_evidence.py": {
@@ -271,7 +293,7 @@
       "spdx": "py"
     },
     "livekit_agent/production.py": {
-      "bytes": 41985,
+      "bytes": 48479,
       "origin": "include:livekit_agent/production.py",
       "spdx": "py"
     },
@@ -296,7 +318,7 @@
       "spdx": "py"
     },
     "llms-full.txt": {
-      "bytes": 38396,
+      "bytes": 45296,
       "origin": "generate:concat",
       "sources": [
         "README.md",
@@ -305,7 +327,7 @@
       ]
     },
     "llms.txt": {
-      "bytes": 5780,
+      "bytes": 7906,
       "origin": "generate:llms.txt"
     },
     "packages/openphonex-common/LICENSE": {
@@ -344,7 +366,7 @@
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/.env.livekit.example": {
-      "bytes": 13259,
+      "bytes": 15312,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/.env.registrar.example": {
@@ -352,11 +374,11 @@
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/SELFHOST.md": {
-      "bytes": 49875,
+      "bytes": 59030,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/docker-compose.livekit.yml": {
-      "bytes": 11106,
+      "bytes": 11923,
       "origin": "include:packages/openphonex-gateway",
       "rewritten": true
     },
@@ -380,8 +402,12 @@
       "bytes": 10647,
       "origin": "include:packages/openphonex-gateway"
     },
+    "packages/openphonex-gateway/deploy/selfhost-bootstrap.sh": {
+      "bytes": 56849,
+      "origin": "include:packages/openphonex-gateway"
+    },
     "packages/openphonex-gateway/deploy/selfhost-smoketest.sh": {
-      "bytes": 51719,
+      "bytes": 56377,
       "origin": "include:packages/openphonex-gateway"
     },
     "packages/openphonex-gateway/deploy/sip.yaml.example": {
@@ -568,7 +594,7 @@
       "origin": "include:packages/openphonex-gateway"
     },
     "tests/test_livekit_outbound_worker.py": {
-      "bytes": 15659,
+      "bytes": 23859,
       "origin": "include:tests/test_livekit_outbound_worker.py",
       "rewritten": true
     },
@@ -588,12 +614,12 @@
       "rewritten": true
     },
     "tests/test_sch172_livekit_control_plane.py": {
-      "bytes": 44645,
+      "bytes": 49630,
       "origin": "include:tests/test_sch172_livekit_control_plane.py",
       "rewritten": true
     },
     "tests/test_sch236_livekit_production.py": {
-      "bytes": 57118,
+      "bytes": 87422,
       "origin": "include:tests/test_sch236_livekit_production.py",
       "rewritten": true
     },
@@ -604,5 +630,5 @@
     }
   },
   "public_repo_name": "openphonex-gateway",
-  "total_bytes": 1367334
+  "total_bytes": 1567426
 }

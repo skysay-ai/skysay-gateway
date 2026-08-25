@@ -11,6 +11,11 @@
 **/sip.yaml
 **/carrier.env
 
+# Per-host bootstrap state: which deployment and token this box is, written by
+# selfhost-bootstrap.sh. It deliberately holds no secret, but it identifies one
+# specific installation and belongs to that host, not to the repository.
+**/gateway-state.json
+
 # Per-call recordings, transcripts, sessions, evidence
 **/sessions/
 **/call-evidence/

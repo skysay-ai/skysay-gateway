@@ -19,7 +19,7 @@ Background reading (optional):
 | 0.2 | Docker Engine + **Compose v2** on that host | `docker compose version` prints a version |
 | 0.3 | A **DID** (phone number) on a SIP trunk that sends calls to your host, plus your carrier's **SIP signaling IP ranges** AND its **RTP / media IP ranges** (from the carrier portal — these are often DIFFERENT range sets) | e.g. DID `+15551230000`, signaling `203.0.113.0/24`, media `203.0.113.128/25` |
 | 0.4 | An **OpenPhonex control plane** URL | OpenPhonex Cloud: `https://api.openphonex.com`, or your own deployment |
-| 0.5 | From that control plane: **organization id**, registered **gateway deployment id**, two **different** credentials (`tgw_` gateway token and `tai_` worker key), and an **agent + phone-number route** configured for your DID | **API Keys → Gateway Tokens** creates the deployment-bound `tgw_`; the separate regular **API Keys** card creates the organization-scoped `tai_` worker key |
+| 0.5 | From that control plane: **organization id**, registered **gateway deployment id**, **one** runtime credential (the `tgw_` gateway token), and an **agent + phone-number route** configured for your DID | **API Keys → Gateway Tokens** creates the deployment-bound `tgw_`. An inbound-answering stack needs no second, organization-scoped key |
 | 0.6 | Provider API keys for the components your agent's published voice stack actually resolves to — commonly **Deepgram** (STT) and **Gemini** (LLM), plus **ElevenLabs** only if your stack uses ElevenLabs TTS | from console.deepgram.com / aistudio.google.com / elevenlabs.io. An English agent on Gemini TTS needs no ElevenLabs key; Estonian requires one |
 | 0.7 | Host firewall able to open `5060/udp` (to the SIP **signaling** ranges) and `10000-10100/udp` (to the RTP **media** ranges) separately. In the registration topology you DROP inbound `5060/udp` instead and forward nothing — see step 4 | cloud-firewall or `ufw`/`nftables` access |
 
@@ -46,14 +46,14 @@ registration is the one step you cannot hurry.
    rings nowhere.
 5. **Register this gateway.** Settings → Gateway → register a self-hosted
    gateway. That gives you `OPENPHONEX_GATEWAY_ID`.
-6. **Mint the two credentials.** They are different things and are not
-   interchangeable:
-   - **API Keys → Gateway Tokens** → a `tgw_` token, bound to the one gateway
-     you just registered. This is `OPENPHONEX_GATEWAY_API_TOKEN`.
-   - the ordinary **API Keys** card → a `tai_` key carrying **`calls:read`** and
-     **`calls:write`**. This is `OPENPHONEX_WORKER_API_TOKEN`.
+6. **Mint the credential.** **API Keys → Gateway Tokens** → a `tgw_` token,
+   bound to the one gateway you just registered. This is
+   `OPENPHONEX_GATEWAY_API_TOKEN`, and for an inbound-answering stack it is the
+   only control-plane credential you need: it routes the inbound call, reads
+   that call's runtime config, and lists MCP tool schemas, each bound
+   server-side to the workspace this deployment belongs to.
 
-   Both are shown **once**. Copy them straight into `.env.livekit`.
+   It is shown **once**. Copy it straight into `.env.livekit`.
 7. **Copy your organization id** into `OPENPHONEX_ORGANIZATION_ID`.
 
 Steps 1, 2 and 5–7 are minutes. Step 3 is the one that can block you, so if you
@@ -92,10 +92,52 @@ cd openphonex-gateway/packages/openphonex-gateway/deploy
 ```
 
 **Expect:** you are in a directory containing `docker-compose.livekit.yml`,
-`livekit.yaml.example`, `sip.yaml.example`, `.env.livekit.example`, and
-`selfhost-smoketest.sh`.
+`livekit.yaml.example`, `sip.yaml.example`, `.env.livekit.example`,
+`selfhost-bootstrap.sh`, and `selfhost-smoketest.sh`.
 
-## Step 2 — Create the four config files
+## Step 2 (short way) — `selfhost-bootstrap.sh`: you set two values
+
+Run this **before** `docker compose up`. Steps 2 and 3 below are what it does
+for you; read them if you would rather do it by hand, or if it stops and asks
+you for something.
+
+```bash
+OPENPHONEX_CONTROL_PLANE_URL=https://api.openphonex.com \
+OPENPHONEX_BOOTSTRAP_API_KEY=tai_... \
+  bash selfhost-bootstrap.sh
+```
+
+The key is an organization API key carrying `gateways:write`. Omit the variable
+and it is read from the terminal without echo. **It is never written to this
+box**, so retiring it afterwards is one action in the dashboard and nothing
+else; the script reminds you by name when it finishes.
+
+Derived and written: `OPENPHONEX_ORGANIZATION_ID`, `OPENPHONEX_GATEWAY_ID` (it
+registers the deployment), the deployment-bound `OPENPHONEX_GATEWAY_API_TOKEN`
+(minted with **no expiry** — an expiry with no auto-rotation only manufactures a
+lockout), `SCH236_TEST_DID_E164`, and the `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET`
+pair, instantiated identically into `livekit.yaml` and `sip.yaml`. It also
+writes `gateway-state.json` (chmod 600) holding identity only — never the token
+secret, and no container reads it.
+
+**Still yours to set by hand:** `DIDWW_INBOUND_ADDRESSES` (the control plane
+holds no carrier signalling ranges and cannot know them for a carrier you
+brought yourself; a wrong allowlist is the everything-green-but-never-rings
+failure) and your provider API keys.
+
+Against an older control plane that cannot default your workspace from the key,
+registration fails with a shaped error and you re-run with
+`OPENPHONEX_ORGANIZATION_ID=org_...` in the environment, alongside the URL.
+
+Re-running is safe and never guesses: a value already in `.env.livekit` is left
+alone, an existing `livekit.yaml` is read rather than rewritten, and an existing
+gateway token is probed before anything is minted (so a casual re-run does not
+leave a live orphaned credential). Exactly one agent-routed number is used —
+zero or several stops the run and tells you what to do, because provisioning
+builds one trunk and the wrong number would leave you with a stack that never
+rings. A fully configured host with no state file is adopted, unchanged.
+
+## Step 2 (long way) — create the four config files
 
 ```bash
 cp livekit.yaml.example livekit.yaml
@@ -129,11 +171,10 @@ them).
 
 Each variable is also documented inline in the file. Complete reference:
 
-### Create the two OpenPhonex credentials first — separately
+### Create the OpenPhonex credential first
 
 After registering the gateway deployment, open the workspace **API Keys**
-page. These credentials are intentionally different and cannot stand in for
-one another:
+page. (`selfhost-bootstrap.sh` does this step for you.)
 
 1. Use the **Gateway Tokens** card to create a deployment-bound `tgw_` token.
    Its one-time reveal includes the exact line below; replace the blank
@@ -144,25 +185,21 @@ one another:
    OPENPHONEX_GATEWAY_API_TOKEN=tgw_...
    ```
 
-2. Use the separate regular **API Keys** card and click **Create self-host
-   worker key**. It creates the organization-scoped `tai_` value for
-   `OPENPHONEX_WORKER_API_TOKEN` with the required inbound-routing scope
-   `calls:read` + `calls:write`.
+That is the whole credential list for an inbound stack. There is deliberately
+no second, organization-scoped key on this box: the deployment-bound token
+cannot be widened, and every organization it acts in is read out of the token
+row server-side rather than from anything this host sends — so a compromise
+here reaches this deployment's workspace and stops.
 
-   ```dotenv
-   OPENPHONEX_WORKER_API_TOKEN=tai_...
-   ```
+The secret is shown once only and is absent from list views. The gateway smoke
+check fails closed for a wrong, revoked, expired, cross-organization, or
+mismatched gateway-id/token pair; mint a replacement from that registered
+gateway's **Gateway Tokens** card.
 
-Both secrets are shown once only and are absent from list views. A `tgw_` token
-is bound to one gateway and cannot authenticate the worker; a `tai_` worker
-key must never be reused as a gateway token. The gateway smoke check fails
-closed for a wrong, revoked, expired, cross-organization, or mismatched
-gateway-id/token pair; mint a replacement from that registered gateway's
-**Gateway Tokens** card.
-
-`OPENPHONEX_ORGANIZATION_ID` must name the workspace that minted the `tai_`
-key and owns the DID. A worker key from another workspace is rejected before
-the control plane returns the inbound call's runtime configuration.
+`OPENPHONEX_ORGANIZATION_ID` must name the workspace that registered this
+gateway and owns the DID. The control plane compares it with the token's own
+organization and refuses a mismatch before it returns the inbound call's
+runtime configuration.
 
 | Variable | What it is | Where to get it | Example |
 |---|---|---|---|
@@ -170,8 +207,7 @@ the control plane returns the inbound call's runtime configuration.
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | the pair from step 2 | you generated it | `opx-selfhost` / 64 hex chars |
 | `OPENPHONEX_CONTROL_PLANE_URL` | control-plane base URL. **Must be `https://`** (the agent refuses plaintext http except to loopback) | step 0.4 | `https://api.openphonex.com` |
 | `OPENPHONEX_GATEWAY_ID` | your gateway deployment id | `POST /v1/gateway-deployments` (or dashboard → Gateways → new self-hosted gateway) | `gw_01HZX...` |
-| `OPENPHONEX_GATEWAY_API_TOKEN` | deployment-scoped `tgw_` token for its matching gateway's number-rules, lifecycle, and artifact operations | **API Keys → Gateway Tokens** after registering that gateway — revealed **once** as `OPENPHONEX_GATEWAY_API_TOKEN=tgw_...` | `tgw_...` |
-| `OPENPHONEX_WORKER_API_TOKEN` | organization-scoped `tai_` worker key (inbound routing, its call-bound runtime-config read, and MCP `tools/list` schema lookup; the self-host baseline is `calls:read` + `calls:write`) | separate regular **API Keys** card → **Create self-host worker key** — revealed **once** | `tai_...` |
+| `OPENPHONEX_GATEWAY_API_TOKEN` | deployment-scoped `tgw_` token — the only runtime credential an inbound stack needs: number-rules sync, inbound routing, that call's runtime-config read, MCP `tools/list` schema lookup, lifecycle and artifact operations | **API Keys → Gateway Tokens** after registering that gateway — revealed **once** as `OPENPHONEX_GATEWAY_API_TOKEN=tgw_...` | `tgw_...` |
 | `OPENPHONEX_ORGANIZATION_ID` | the org that owns your DID | dashboard → organization settings | `org_01HZX...` |
 | `SCH236_TEST_DID_E164` | the DID(s) this gateway answers, **with** `+`. Comma-separate for more than one — they share one trunk and one dispatch rule | your carrier + registered in OpenPhonex | `+15551230000` or `+15551230000,+3725551234` |
 | `DEEPGRAM_API_KEY` | STT provider key | console.deepgram.com → API Keys | `...` |
@@ -194,22 +230,23 @@ not need it). Supply **all four** or **none**:
 | `DIDWW_OUTBOUND_FROM_USER` | one or more allowed outbound From-users, comma-separated, digits only | your caller-ID DID(s) | `15551230000,37255501234` |
 | `DIDWW_OUTBOUND_AUTH_USERNAME` / `DIDWW_OUTBOUND_AUTH_PASSWORD` | outbound trunk auth pair | carrier portal → SIP trunk credentials | `...` |
 | `OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND` | second fail-closed execution gate; leave `0` until provisioning + smoke tests pass | you | `0`, then `1` at cutover |
-| `OPENPHONEX_OUTBOUND_WORKER_ID` | stable identity recorded when claiming jobs | choose a unique name per worker | `livekit-outbound-1` |
+| `OPENPHONEX_OUTBOUND_WORKER_ID` | stable identity recorded when claiming jobs (legacy `queue` mode only) | choose a unique name per worker | `livekit-outbound-1` |
 | `OPENPHONEX_OUTBOUND_TRUNK_NAME` | LiveKit outbound trunk the worker must match | provisioner default | `openphonex-selfhost-outbound` |
-| `OPENPHONEX_OUTBOUND_POLL_SECONDS` | queue poll interval | default is fine | `2` |
+| `OPENPHONEX_OUTBOUND_POLL_SECONDS` | queue poll interval (legacy `queue` mode only) | default is fine | `2` |
+| `OPENPHONEX_WORKER_API_TOKEN` | organization-scoped `tai_` key, read ONLY by the legacy `queue` mode's job-claiming worker — leave blank on a `local`-mode deployment | workspace → API Keys | *(blank)* |
 | `OPENPHONEX_OUTBOUND_RINGING_TIMEOUT_SECONDS` | stop unanswered ringing after this many seconds (5–120) | your operating policy | `45` |
 | `OPENPHONEX_OUTBOUND_MAX_CALL_DURATION_SECONDS` | hard LiveKit SIP call cap (30–14400) | your operating policy | `1800` |
 
 **Optional — Sinhala (si-LK) voice stack** (only needed for an agent
 configured with `language: si`; neither Deepgram nor ElevenLabs supports
-Sinhala, so a `si` agent resolves to Google Chirp 2 → Gemini → Gemini-TTS
+Sinhala, so a `si` agent resolves to Google command_and_search → Gemini → Gemini-TTS
 instead). Set exactly **one** of the two GCP credential variables:
 
 | Variable | What it is | Where to get it | Example |
 |---|---|---|---|
-| `GOOGLE_APPLICATION_CREDENTIALS` | path to a GCP service-account JSON key file (Cloud Speech-to-Text v2, role `roles/speech.client`) — **not** the Gemini API key above | GCP Console → IAM & Admin → Service Accounts → Keys → Add key (JSON) | `/run/secrets/gcp-speech-sa.json` |
+| `GOOGLE_APPLICATION_CREDENTIALS` | path to a GCP service-account JSON key file (Cloud Speech-to-Text, role `roles/speech.client`) — **not** the Gemini API key above | GCP Console → IAM & Admin → Service Accounts → Keys → Add key (JSON) | `/run/secrets/gcp-speech-sa.json` |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | the same service-account JSON, inlined as one env var instead of a file | same service account as above | `{"type":"service_account",...}` |
-| `GOOGLE_STT_LOCATION` | Cloud Speech-to-Text v2 recognizer region (optional; default `asia-southeast1`, empirically verified for si-LK Chirp 2 — Chirp 3 rejects si-LK with an HTTP 400 in both `eu` and `us`) | you | `asia-southeast1` |
+| `GOOGLE_STT_LOCATION` | Cloud Speech-to-Text v2 recognizer region for Chirp 2 selections; Sinhala command_and_search uses the v1 global endpoint | you | `asia-southeast1` |
 
 **Optional — Tamil (ta-IN) voice stack** (only needed for an agent configured
 with `language: ta`). The worker serves `en`, `et` and `si` from the pipelines
@@ -226,7 +263,9 @@ Do **not** put `SONIOX_STT_API_KEY`, `SONIOX_TTS_API_KEY` or
 `FISH_AUDIO_TTS_API_KEY` in this file. Those are per-call lease names the
 control plane injects for a workspace that brings its own key; the worker
 treats one of them without its `OPENPHONEX_BYOK_*` marker as a corrupt lease
-and refuses the call, so a copy here takes that provider down completely.
+and refuses the call. A copy here is inert rather than an outage —
+`carrier-entrypoint.sh` unsets every lease name after it sources this file —
+but it is still not a key the worker will ever read.
 
 **Optional — registering SIP sidecar** (registration topology only; skip this
 entire section for a public-IP host). These live in their **own file**,
@@ -366,11 +405,61 @@ docker compose -f docker-compose.livekit.yml --profile provision run --rm provis
 the exact reason (e.g. a missing/malformed variable, or a non-public
 `DIDWW_INBOUND_ADDRESSES` entry). Fix that and rerun.
 
-The guided self-host worker key is inbound-only. It deliberately omits the
-global `worker_jobs:*` authority, and the compose disables its non-critical
-global worker-heartbeat loop. Do not start the optional `outbound-worker` profile
-with this baseline credential; keep `OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND=0`
-unless OpenPhonex has issued a separately reviewed outbound-worker credential.
+### Outbound calling from this box
+
+Outbound is optional; skip this if the deployment only answers calls.
+
+There are two ways a deployment's outbound calls get dialed, and
+`outbound_execution_mode` on the deployment says which one you are on. Read it
+with your gateway token:
+
+```bash
+curl -sS -H "Authorization: Bearer $OPENPHONEX_GATEWAY_API_TOKEN" \
+  "$OPENPHONEX_CONTROL_PLANE_URL/v1/gateway-deployments/$OPENPHONEX_GATEWAY_ID" \
+  | grep -o '"outbound_execution_mode":"[a-z]*"'
+```
+
+**`local` (recommended for a self-hosted box).** This box asks the control
+plane to admit the call it is about to place, and dials it with the single-use
+token that request returns. It needs **no organization-scoped key** — the same
+`tgw_` token does inbound and outbound. Ask the workspace owner to set the mode
+(`PATCH /v1/gateway-deployments/{id}/outbound-execution-mode` with
+`{"outbound_execution_mode": "local"}`, `gateways:write`), set
+`OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND=1` in `.env.livekit`, and place a call:
+
+```bash
+docker compose -f docker-compose.livekit.yml run --rm outbound-worker \
+  python /app/outbound_worker.py originate \
+    --to +15551234567 --purpose appointment --reason "confirm tomorrow's booking"
+```
+
+`--from` defaults to the first number in `SCH236_TEST_DID_E164`, and the agent
+defaults to that number's own agent. `--purpose` and `--reason` are required:
+the control plane's outbound authorization is a decision about a stated
+purpose, and this command will not invent one for you. It prints one
+`OPENPHONEX_OUTBOUND {...}` line with the call id, or
+`OPENPHONEX_OUTBOUND_FAILED {...}` with the reason.
+
+Note that `docker compose run` ignores compose profiles, so
+`OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND=1` is what gates this command — it refuses
+while the gate is `0`. `--profile outbound` still gates the long-running
+queue-claiming worker below.
+
+Once the deployment is in `local` mode, a remote `POST /v1/calls` for this
+workspace's numbers is **refused** rather than queued, with a message naming
+the command above. That is deliberate: this box no longer polls the job queue,
+so a queued call would reserve money and never ring.
+
+**`queue` (the default, and every deployment created before local
+origination).** Outbound calls are requested from the control plane with an
+organization-scoped API key (`POST /v1/calls`), and this box's
+`--profile outbound` worker claims and dials them. Claiming another requester's
+`call.outbound_originate` job is `worker_jobs:*` authority over the whole
+workspace queue, which a deployment-bound token deliberately does not carry —
+so this mode is the one part of the stack that reads an organization-scoped
+`tai_` key, in `OPENPHONEX_WORKER_API_TOKEN`. Leave that variable blank and
+keep `OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND=0` unless you mean to take back the
+organization-wide blast radius on purpose.
 
 ## Step 7 — Verify everything (the smoke test)
 
@@ -385,8 +474,9 @@ needs root. Treat it as not-yet-ready rather than a pass.
 **Expect:** `RESULT: PASS` and a per-check `[PASS]` list covering: services
 running, redis PONG, livekit-server answering, **agent registered with
 LiveKit**, the matching deployment-bound **gateway `tgw_` token** accepted by
-the non-mutating number-rules read, the organization-scoped **worker `tai_`
-key** accepted by MCP `tools/list`, artifact dirs writable. Every `[FAIL]`
+the non-mutating number-rules read and by MCP `tools/list`, artifact dirs
+writable (an organization-scoped `tai_` key is checked too, but only if an
+install still sets one). Every `[FAIL]`
 line prints the exact fix; apply it and re-run until PASS.
 
 ## Step 8 — Place a test call

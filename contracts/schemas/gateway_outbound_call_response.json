@@ -1,0 +1,38 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gateway_outbound_call_response.json",
+  "title": "Deployment-local outbound call admission result",
+  "type": "object",
+  "properties": {
+    "gateway_id": {
+      "type": "string"
+    },
+    "authorized": {
+      "type": "boolean"
+    },
+    "authorization": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "dial_plan": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "call": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "gateway_id",
+    "authorized",
+    "authorization",
+    "dial_plan",
+    "call"
+  ],
+  "additionalProperties": false
+}

@@ -55,6 +55,35 @@ TURN_DETECTOR_SUPPORTED_LANGUAGES = frozenset(
 _LEGACY_STT_REGISTRIES = frozenset({"deepgram", "google"})
 _LEGACY_TTS_REGISTRIES = frozenset({"elevenlabs", "gemini_tts"})
 
+# ElevenLabs answers its realtime WebSocket with a 403 for these models, which
+# LiveKit surfaces as a non-retryable APIStatusError: the turn loop dies while
+# STT and the LLM keep running, so the call connects, transcribes, and is
+# silent. LiveKit's StreamAdapter preserves streaming AgentSession semantics
+# over the plugin's HTTP synthesize(), which these models do serve.
+#
+# This is a property of the model. It was first met on Estonian -- the one
+# language whose only voice is eleven_v3 -- and the fallback was written as a
+# language test, which left the same model mute in every other language.
+#
+# The control plane keeps its own copy in
+# ``telephony_ai.services.call_admission_profile`` because the worker ships in a
+# separately deployed container and the two cannot import each other. The sets
+# are held equal by test_sch236_livekit_demo.
+NON_STREAMING_TTS_MODELS = frozenset({"eleven_v3"})
+
+
+def tts_needs_http_stream_adapter(*, tts_registry: str, tts_model: str, language: str) -> bool:
+    """Whether this stack must synthesize over HTTP instead of the realtime socket.
+
+    Estonian stays in the condition even though its only approved voice is
+    already a non-streaming model: the guard that keeps it there lives in
+    another module, and losing the wrap here would be a silent line rather than
+    a refusal.
+    """
+    if tts_registry != "elevenlabs":
+        return False
+    return tts_model.strip() in NON_STREAMING_TTS_MODELS or language == "et"
+
 
 def first_continuous_threshold_run(
     samples: Iterable[tuple[float, float]],
@@ -198,7 +227,7 @@ def _google_credentials_available(environ: Mapping[str, str]) -> bool:
 
 
 def _google_stt_credential_kwargs(environ: Mapping[str, str]) -> dict[str, Any]:
-    """Resolve GCP credentials for LiveKit's Google STT plugin (Chirp 2).
+    """Resolve GCP credentials for LiveKit's Google STT plugin.
 
     Two supported shapes, matching what ``livekit.plugins.google.STT`` itself
     accepts:
@@ -213,7 +242,7 @@ def _google_stt_credential_kwargs(environ: Mapping[str, str]) -> dict[str, Any]:
       that fallback path is not what's exercised when the var IS set, which
       is the expected case here.)
 
-    NOTE this is a distinct credential from ``GEMINI_API_KEY`` -- Chirp 2 is a
+    NOTE this is a distinct credential from ``GEMINI_API_KEY`` -- Cloud STT is a
     GCP Cloud Speech-to-Text API, not the Gemini API, and needs a real GCP
     service account (see the founder-facing setup steps in SELFHOST.md).
     """
@@ -274,6 +303,28 @@ def _fish_audio_tts_key(environ: Mapping[str, str]) -> str:
     return str(environ.get("FISH_AUDIO_API_KEY") or "")
 
 
+def _gemini_tts_key(environ: Mapping[str, str]) -> str:
+    """Resolve a platform Gemini TTS key without crossing an LLM BYOK key.
+
+    Gemini TTS is platform-managed for the first cohort. A scoped marker is
+    still needed when a selected Gemini LLM BYOK lease replaces the generic
+    key: TTS must keep using the platform account rather than silently using
+    that LLM customer's key. A stale scoped variable is an error rather than a
+    fallback to whichever generic Gemini key happens to be in the process.
+    """
+    platform_marker = environ.get("OPENPHONEX_PLATFORM_GEMINI_TTS")
+    if platform_marker is not None:
+        if platform_marker != "1":
+            raise DemoConfigurationError("Gemini TTS credential marker is invalid")
+        key = str(environ.get("GEMINI_TTS_API_KEY") or "")
+        if not key:
+            raise DemoConfigurationError("Gemini TTS platform credential is missing")
+        return key
+    if str(environ.get("GEMINI_TTS_API_KEY") or ""):
+        raise DemoConfigurationError("Gemini TTS credential marker is invalid")
+    return str(environ.get("GEMINI_API_KEY") or environ.get("GOOGLE_API_KEY") or "")
+
+
 def build_demo_stack(
     profile: DemoProfile,
     *,
@@ -292,6 +343,10 @@ def build_demo_stack(
     load_turn_detector: Callable[..., Any] | None = None,
     soniox_usage_reference: str = "",
     require_soniox_usage_reference: bool = True,
+    # A caller that is not the production settlement path must opt out
+    # explicitly. New hosted call paths therefore cannot accidentally turn on
+    # Gemini TTS without native prompt/audio-token evidence.
+    require_gemini_tts_usage_metadata: bool = True,
 ) -> DemoStack:
     stt_registry = profile.stt_registry
     tts_registry = profile.tts_registry
@@ -324,6 +379,7 @@ def build_demo_stack(
         if not tts_capability["runnable"] or profile.language not in tts_capability["languages"]:
             raise DemoConfigurationError("selected TTS capability is unavailable")
     supplied_soniox_tts = soniox_tts is not None
+    supplied_gemini_tts = gemini_tts is not None
     missing_factory = (
         (stt_registry == "google" and google_stt is None)
         or (stt_registry == "deepgram" and deepgram_stt is None)
@@ -351,6 +407,11 @@ def build_demo_stack(
                     from .fish_audio_tts import TTS as MeteredFishAudioTTS
                 except ImportError:  # flat worker import
                     from fish_audio_tts import TTS as MeteredFishAudioTTS
+            if tts_registry == "gemini_tts" and gemini_tts is None:
+                try:
+                    from .gemini_tts import TTS as MeteredGeminiTTS
+                except ImportError:  # pragma: no cover - flat worker import
+                    from gemini_tts import TTS as MeteredGeminiTTS
         except ImportError as exc:
             raise DemoConfigurationError(
                 "install the pinned LiveKit STT, TTS, VAD, and turn-detector plugins"
@@ -359,7 +420,8 @@ def build_demo_stack(
         google_stt = google_stt or google.STT
         gemini_llm = gemini_llm or google.LLM
         elevenlabs_tts = elevenlabs_tts or elevenlabs.TTS
-        gemini_tts = gemini_tts or google.beta.GeminiTTS
+        if tts_registry == "gemini_tts":
+            gemini_tts = gemini_tts or MeteredGeminiTTS
         if stt_registry == "soniox":
             soniox_stt = soniox_stt or soniox.STT
             soniox_stt_options = soniox_stt_options or soniox.STTOptions
@@ -369,7 +431,10 @@ def build_demo_stack(
             fish_audio_tts = fish_audio_tts or MeteredFishAudioTTS
         load_vad = load_vad or silero.VAD.load
         load_turn_detector = load_turn_detector or inference.TurnDetector
-    if tts_registry == "elevenlabs" and profile.language == "et" and stream_adapter is None:
+    needs_http_tts = tts_needs_http_stream_adapter(
+        tts_registry=tts_registry, tts_model=profile.tts_model, language=profile.language
+    )
+    if needs_http_tts and stream_adapter is None:
         try:
             from livekit.agents import tts as livekit_tts
         except ImportError as exc:
@@ -380,6 +445,7 @@ def build_demo_stack(
 
     deepgram_key = str(environ.get("DEEPGRAM_API_KEY") or "")
     gemini_key = str(environ.get("GEMINI_API_KEY") or environ.get("GOOGLE_API_KEY") or "")
+    gemini_tts_key = _gemini_tts_key(environ) if tts_registry == "gemini_tts" else ""
     eleven_key = str(environ.get("ELEVENLABS_API_KEY") or environ.get("ELEVEN_API_KEY") or "")
     # The per-call environment can carry a scoped lease for a different
     # component. Resolve and validate that lease only if this profile actually
@@ -403,6 +469,10 @@ def build_demo_stack(
         raise DemoConfigurationError("provider settings changed after profile validation")
     if tts_registry == "fishaudio" and not fish_key:
         raise DemoConfigurationError("provider settings changed after profile validation")
+    if tts_registry == "gemini_tts" and not gemini_tts_key:
+        raise DemoConfigurationError("provider settings changed after profile validation")
+    if require_gemini_tts_usage_metadata and tts_registry == "gemini_tts" and supplied_gemini_tts:
+        raise DemoConfigurationError("paid Gemini TTS requires the native usage adapter")
 
     # The provider logs exact token quantities only if both realtime adapters
     # receive opaque client references. Browser demos do not have a paid call
@@ -444,18 +514,21 @@ def build_demo_stack(
 
     if stt_registry == "google":
         assert google_stt is not None
-        # Empirically verified against the live Google Speech-to-Text v2 API:
-        # chirp_3 rejects si-LK with an HTTP 400 in both the eu and us
-        # locations. chirp_2 in asia-southeast1 is the verified si-LK path --
-        # it transcribed a Sinhala test phrase correctly at 0.89 confidence --
-        # and asia-southeast1 is also geographically closer to Sri Lanka than
-        # eu, so it is the default location too.
-        stt = google_stt(
-            model="chirp_2",
-            languages=profile.stt_language,
-            location=str(environ.get("GOOGLE_STT_LOCATION") or "asia-southeast1"),
+        google_model = profile.stt_model or "chirp_2"
+        google_kwargs: dict[str, Any] = {
+            "model": google_model,
+            "languages": profile.stt_language,
             **_google_stt_credential_kwargs(environ),
-        )
+        }
+        # LiveKit routes command_and_search through Speech-to-Text v1, whose
+        # streaming endpoint is global. Chirp 2 uses v2 and needs the regional
+        # recognizer location. Sending a v1 model to the v2 regional endpoint
+        # is itself a connection failure, so the distinction is explicit.
+        if google_model == "chirp_2":
+            google_kwargs["location"] = str(
+                environ.get("GOOGLE_STT_LOCATION") or "asia-southeast1"
+            )
+        stt = google_stt(**google_kwargs)
     elif stt_registry == "deepgram":
         assert deepgram_stt is not None
         stt = deepgram_stt(model="nova-3", language=profile.stt_language, api_key=deepgram_key)
@@ -489,7 +562,14 @@ def build_demo_stack(
         assert gemini_tts is not None
         # Gemini-TTS has no explicit language parameter -- it infers the
         # spoken language from the input text itself, per Google's docs.
-        tts = gemini_tts(model=profile.tts_model, voice_name=profile.voice_id, api_key=gemini_key)
+        gemini_tts_kwargs: dict[str, Any] = {
+            "model": profile.tts_model,
+            "voice_name": profile.voice_id,
+            "api_key": gemini_tts_key,
+        }
+        if not supplied_gemini_tts:
+            gemini_tts_kwargs["require_usage_metadata"] = require_gemini_tts_usage_metadata
+        tts = gemini_tts(**gemini_tts_kwargs)
     elif tts_registry == "elevenlabs":
         assert elevenlabs_tts is not None
         tts = elevenlabs_tts(
@@ -498,11 +578,12 @@ def build_demo_stack(
             language=profile.language,
             api_key=eleven_key,
         )
-        if profile.language == "et":
+        if needs_http_tts:
             assert stream_adapter is not None
-            # ElevenLabs v3 supports Estonian over HTTP synthesis but rejects the
-            # realtime WebSocket.  LiveKit's sentence adapter preserves streaming
-            # AgentSession semantics while calling the plugin's HTTP synthesize().
+            # See NON_STREAMING_TTS_MODELS: these models serve HTTP synthesis and
+            # 403 the realtime WebSocket.  LiveKit's sentence adapter preserves
+            # streaming AgentSession semantics while calling the plugin's HTTP
+            # synthesize().
             tts = stream_adapter(tts=tts)
     elif tts_registry == "soniox":
         if profile.tts_model != "tts-rt-v2":
@@ -605,7 +686,7 @@ def build_demo_stack(
         safe_identity={
             "language": profile.language,
             "stt": (
-                f"google/chirp_2/{profile.stt_language}"
+                f"google/{profile.stt_model or 'chirp_2'}/{profile.stt_language}"
                 if stt_registry == "google"
                 else f"soniox/stt-rt-v5/{profile.stt_language}"
                 if stt_registry == "soniox"
@@ -617,7 +698,7 @@ def build_demo_stack(
                 "chunked_http"
                 if tts_registry == "gemini_tts"
                 else "http_sentence_stream_adapter"
-                if tts_registry == "elevenlabs" and profile.language == "et"
+                if needs_http_tts
                 else "realtime_websocket"
             ),
             "voice_id": profile.voice_id,
