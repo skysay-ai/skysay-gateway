@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Unigox OÜ
 """Pinned Soniox TTS adapter with opaque per-call usage correlation.
 
-LiveKit's Soniox plugin is deliberately pinned at 1.6.6 because it owns the
+LiveKit's Soniox plugin is deliberately pinned at 1.7.1 because it owns the
 streaming details we must preserve: sentence buffering, the short idle stream
 timeout, stream cancellation, and rotation before the provider's two-minute
 stream ceiling.  That plugin exposes ``client_reference_id`` for STT but not
@@ -43,14 +43,16 @@ class _ConnectionWithReference(_soniox_tts._Connection):  # type: ignore[name-de
         *args: Any,
         client_reference_id: str,
         close_after_failure: Callable[["_ConnectionWithReference"], Awaitable[None]],
+        on_request_started: Callable[[], None] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._openphonex_client_reference_id = client_reference_id
-        self._openphonex_close_after_failure = close_after_failure
+        self._skysay_client_reference_id = client_reference_id
+        self._skysay_close_after_failure = close_after_failure
+        self._skysay_on_request_started = on_request_started
 
     async def _send_loop(self) -> None:
-        """Copy 1.6.6's send loop, modifying only its start configuration.
+        """Copy 1.7.1's send loop, modifying only its start configuration.
 
         The message classes and all non-start branches remain the upstream
         ones.  In particular, a cancellation still sends the plugin's exact
@@ -76,7 +78,7 @@ class _ConnectionWithReference(_soniox_tts._Connection):  # type: ignore[name-de
                         "sample_rate": message.opts.sample_rate,
                         "speed": message.opts.speed,
                         "stream_id": message.stream_id,
-                        "client_reference_id": self._openphonex_client_reference_id,
+                        "client_reference_id": self._skysay_client_reference_id,
                     }
                     if message.opts.bitrate is not None:
                         config["bitrate"] = message.opts.bitrate
@@ -84,6 +86,8 @@ class _ConnectionWithReference(_soniox_tts._Connection):  # type: ignore[name-de
                 elif isinstance(message, _soniox_tts._SendText):
                     payload: dict[str, Any] = {"stream_id": message.stream_id}
                     if message.text:
+                        if self._skysay_on_request_started is not None:
+                            self._skysay_on_request_started()
                         payload["text"] = message.text
                     if message.text_end:
                         payload["text_end"] = True
@@ -105,29 +109,33 @@ class _ConnectionWithReference(_soniox_tts._Connection):  # type: ignore[name-de
                 # pooled connection.  Do not create an unreferenced task here:
                 # a long-lived worker must be able to bound and fail closed on
                 # wedged provider socket cleanup.
-                await self._openphonex_close_after_failure(self)
+                await self._skysay_close_after_failure(self)
 
 
 class TTS(soniox.TTS):
-    """Soniox 1.6.6 TTS with a safe opaque usage-log reference."""
+    """Soniox 1.7.1 TTS with a safe opaque usage-log reference."""
 
-    def __init__(self, *, client_reference_id: str, **kwargs: Any) -> None:
+    def __init__(
+        self, *, client_reference_id: str,
+        on_request_started: Callable[[], None] | None = None, **kwargs: Any,
+    ) -> None:
         reference = str(client_reference_id or "").strip()
         if not reference:
             raise ValueError("Soniox TTS client_reference_id is required")
-        self._openphonex_client_reference_id = reference
+        self._skysay_client_reference_id = reference
+        self._skysay_on_request_started = on_request_started
         # A connection that fails before becoming current, or whose send loop
         # has failed, has no successful stream owner. Retain every cleanup task
         # until completion so it cannot be garbage-collected while closing.
         # The set has a small fixed capacity; saturation blocks a new provider
         # socket before one is constructed.
-        self._openphonex_unowned_close_tasks: set[asyncio.Task[Any]] = set()
+        self._skysay_unowned_close_tasks: set[asyncio.Task[Any]] = set()
         super().__init__(**kwargs)
 
     async def _close_connection_after_failure(self, connection: Any) -> None:
         """Bound a fatal socket close without holding stream admission open."""
 
-        if len(self._openphonex_unowned_close_tasks) >= _MAX_PENDING_CLOSE_TASKS:
+        if len(self._skysay_unowned_close_tasks) >= _MAX_PENDING_CLOSE_TASKS:
             # ``_current_connection`` normally checks capacity before
             # allocating. A send-loop or connect-failure race can fill the
             # slots after that check, however. Never drop this socket: attempt
@@ -146,7 +154,7 @@ class TTS(soniox.TTS):
         task = asyncio.create_task(
             connection.aclose(), name="soniox-tts-fatal-close"
         )
-        self._openphonex_unowned_close_tasks.add(task)
+        self._skysay_unowned_close_tasks.add(task)
 
         def cancel_if_stuck() -> None:
             if not task.done():
@@ -159,7 +167,7 @@ class TTS(soniox.TTS):
 
         def reap(done: asyncio.Task[Any]) -> None:
             timeout_handle.cancel()
-            self._openphonex_unowned_close_tasks.discard(done)
+            self._skysay_unowned_close_tasks.discard(done)
             if done.cancelled():
                 return
             try:
@@ -175,7 +183,7 @@ class TTS(soniox.TTS):
     async def _current_connection(self, *, timeout: float) -> tuple[Any, float, bool]:
         """Use upstream connection lifecycle with our start-frame wrapper."""
         # These are the exact name-mangled fields initialized by Soniox TTS
-        # 1.6.6.  Keeping the rest of this method verbatim preserves pooling,
+        # 1.7.1.  Keeping the rest of this method verbatim preserves pooling,
         # drain/close, cancellation and stream-rotation behavior.
         failed_connection: _ConnectionWithReference | None = None
         try:
@@ -185,14 +193,15 @@ class TTS(soniox.TTS):
                     return connection, 0.0, True
                 if connection is not None and not connection.closed:
                     connection.mark_non_current()
-                if len(self._openphonex_unowned_close_tasks) >= _MAX_PENDING_CLOSE_TASKS:
+                if len(self._skysay_unowned_close_tasks) >= _MAX_PENDING_CLOSE_TASKS:
                     raise APIConnectionError("Soniox TTS cleanup capacity is saturated")
                 started = time.perf_counter()
                 new_connection = _ConnectionWithReference(
                     self._opts,
                     self._ensure_session(),
-                    client_reference_id=self._openphonex_client_reference_id,
+                    client_reference_id=self._skysay_client_reference_id,
                     close_after_failure=self._close_connection_after_failure,
+                    on_request_started=self._skysay_on_request_started,
                 )
                 try:
                     await asyncio.wait_for(new_connection.connect(), timeout=timeout)

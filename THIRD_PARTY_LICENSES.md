@@ -1,29 +1,21 @@
 # Third-party licenses
 
-The OpenPhonex Gateway is licensed under Apache-2.0 (see `LICENSE`). It depends
+The Skysay Gateway is licensed under Apache-2.0 (see `LICENSE`). It depends
 on the third-party components listed below. **None of these are bundled, forked,
 modified, or redistributed by this repository** — they are declared as
 dependencies (or invoked as external binaries) and obtained by the operator from
 their respective upstreams at install/build/run time.
 
-## Runtime dependencies
+## Gateway library dependencies
 
-| Component            | License        | How it is used                                                        | Bundled? |
-|----------------------|----------------|-----------------------------------------------------------------------|----------|
-| websocket-client     | Apache-2.0     | Deepgram live streaming STT transport (`openphonex-gateway` core dep)  | No (pip) |
-| faster-whisper       | MIT            | Optional local STT adapter (`[local-stt]` extra)                      | No (pip) |
-| numpy                | BSD-3-Clause   | Optional PCM resample helper for local models (`[local-*]` extras)    | No (pip) |
-| Piper                | MIT            | Optional local TTS engine — invoked as an external `piper` binary     | No       |
-| Kokoro               | Apache-2.0     | Optional local TTS engine (`[local-tts]` extra)                       | No (pip) |
-| ffmpeg               | LGPL-2.1 / GPL | Optional audio transcode — invoked as an external binary if present   | No       |
-
-The core packages and their test suite never require the optional local-model
-extras; each local adapter is lazily imported behind a `ProviderSpec` and only
-loaded when explicitly selected.
+The portable `skysay-gateway` library declares only
+`skysay-common`, another Skysay package included in this export. Its
+caller-side evidence referee and RTP codec use the Python standard library; it
+does not bundle provider adapters, local models, or a call runtime.
 
 ## Self-host stack components (obtained by the operator, not redistributed)
 
-The compose file in `packages/openphonex-gateway/deploy/` runs the following
+The compose file in `packages/skysay-gateway/deploy/` runs the following
 as separate, digest-pinned container images / pip packages that the operator
 pulls directly from their upstreams:
 
@@ -36,16 +28,15 @@ pulls directly from their upstreams:
 
 ## External services (descriptive references only)
 
-The production voice pipeline calls the Deepgram, Google (Gemini), and
-ElevenLabs HTTP/WebSocket APIs with the operator's own API keys. No vendor SDK
-or key is bundled. "LiveKit", "Redis", "DIDWW", "Deepgram", "Gemini",
-"ElevenLabs", "Ollama", and "vLLM" are trademarks of their respective owners
-and are referenced descriptively.
+The voice pipeline calls the speech and model providers the agent uses
+(Deepgram, Google, OpenAI, ElevenLabs, Soniox, Fish Audio, Cartesia, Azure)
+over their HTTP/WebSocket APIs, through the pip-installed livekit-agents
+provider plugins and vendor SDKs listed in
+`livekit_agent/agent/requirements.txt`. No API key is bundled. "LiveKit",
+"Redis", "DIDWW" and the provider names are trademarks of their respective
+owners and are referenced descriptively.
 
 ## Full license texts
 
-Apache-2.0 components are covered by the repository `LICENSE`. The MIT and
-BSD-3-Clause texts for `faster-whisper`, `numpy`, and `Piper` are reproduced in
-their respective upstream distributions; consult each package's `LICENSE` file
-as installed in your environment. This project does not redistribute those
-files because it does not redistribute those packages.
+Apache-2.0 components are covered by the repository `LICENSE`. This project
+does not redistribute third-party Python packages or container images.

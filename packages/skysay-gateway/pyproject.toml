@@ -1,0 +1,20 @@
+[project]
+name = "skysay-gateway"
+version = "0.2.0"
+description = "Skysay caller-side voice evidence and portable RTP utilities."
+requires-python = "==3.13.*"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = [
+    "skysay-common",
+]
+
+[project.scripts]
+skysay-voice-evidence = "skysay_gateway.evidence.voice_evidence_cli:main"
+
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["skysay_gateway", "skysay_gateway.evidence"]

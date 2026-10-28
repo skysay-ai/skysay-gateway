@@ -1,52 +1,524 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "OpenPhonex voice capability registry",
+  "title": "Skysay voice capability registry",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "registry_version", "runtime_languages", "legacy_runtime_languages", "runnable_registry_names", "capabilities"],
+  "required": [
+    "schema_version",
+    "registry_version",
+    "runtime_languages",
+    "legacy_runtime_languages",
+    "runnable_registry_names",
+    "declared_stack_languages",
+    "live_sources",
+    "workflow_source_measurement",
+    "capabilities"
+  ],
   "properties": {
-    "schema_version": {"type": "integer", "const": 1},
-    "registry_version": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "registry_version": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
     "runtime_languages": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 16,
+      "maxItems": 96,
       "uniqueItems": true,
-      "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+      }
     },
     "legacy_runtime_languages": {
       "type": "array",
       "uniqueItems": true,
-      "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+      }
     },
     "runnable_registry_names": {
       "type": "array",
       "uniqueItems": true,
-      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]*$"
+      }
+    },
+    "declared_stack_languages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/declared_stack_language"
+      }
     },
     "capabilities": {
       "type": "array",
       "minItems": 1,
-      "items": {"$ref": "#/$defs/capability"}
+      "items": {
+        "$ref": "#/$defs/capability"
+      }
+    },
+    "live_sources": {
+      "description": "Live (speech-to-speech) workflow output sources and the languages each declares. A workflow source is admitted for a language its row declares; language_scope any declares every language the platform accepts as a call language. Which languages Skysay has tested is a separate functional record, never this row.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/live_source"
+      }
+    },
+    "workflow_source_measurement": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/workflow_source_measurement"}
     }
   },
   "$defs": {
+    "live_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model",
+        "language_scope",
+        "basis"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "language_scope": {
+          "const": "any"
+        },
+        "basis": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "workflow_source_measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "component", "provider", "model", "measure", "source"],
+      "properties": {
+        "role": {"type": "string", "enum": ["listener", "authored", "live"]},
+        "component": {"type": "string", "enum": ["stt", "tts"]},
+        "provider": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "measure": {"type": "string", "enum": ["input_audio_seconds", "output_audio_seconds"]},
+        "token_units_per_minute": {
+          "type": "object",
+          "minProperties": 2,
+          "maxProperties": 2,
+          "propertyNames": {
+            "enum": ["input_audio_tokens", "output_text_tokens", "input_text_tokens", "output_audio_tokens"]
+          },
+          "additionalProperties": {"type": "integer", "minimum": 1}
+        },
+        "source": {"type": "string", "minLength": 1}
+      }
+    },
+    "declared_stack_language": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "provider",
+        "registry_name",
+        "model",
+        "languages"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "component": {
+                "const": "tts"
+              }
+            },
+            "required": [
+              "component"
+            ]
+          },
+          "then": {
+            "required": [
+              "billing"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "billing"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              {
+                "properties": {
+                  "component": {
+                    "const": "stt"
+                  }
+                },
+                "required": [
+                  "component"
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "registry_name": {
+                        "const": "google"
+                      }
+                    },
+                    "required": [
+                      "registry_name"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "provider": {
+                        "const": "google"
+                      }
+                    },
+                    "required": [
+                      "provider"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "locales"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "component": {
+                "const": "stt"
+              }
+            },
+            "required": [
+              "component"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "locales"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "component": {
+                "const": "stt"
+              }
+            },
+            "required": [
+              "component"
+            ]
+          },
+          "then": {
+            "required": [
+              "stt_interims_usable"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "stt_interims_usable"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "component": {
+                "const": "stt"
+              }
+            },
+            "required": [
+              "component"
+            ]
+          },
+          "then": {
+            "required": [
+              "language_identification"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "language_identification"
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {
+        "component": {
+          "type": "string",
+          "enum": [
+            "stt",
+            "llm",
+            "tts"
+          ]
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "registry_name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "languages": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+          }
+        },
+        "locales": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+          }
+        },
+        "stt_interims_usable": {
+          "type": "boolean"
+        },
+        "billing": {
+          "$ref": "#/$defs/declared_billing"
+        },
+        "language_identification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "none",
+                "candidates",
+                "any"
+              ]
+            },
+            "max_candidates": {
+              "type": "integer",
+              "minimum": 2
+            }
+          },
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "candidates"
+              }
+            },
+            "required": ["mode"]
+          },
+          "then": {
+            "required": ["max_candidates"]
+          },
+          "else": {
+            "not": {
+              "required": ["max_candidates"]
+            }
+          }
+        },
+        "simultaneous_recognition": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "adapter_options"],
+              "oneOf": [
+                {"required": ["languages"], "not": {"required": ["language_scope"]}},
+                {"required": ["language_scope"], "not": {"required": ["languages"]}}
+              ],
+              "properties": {
+                "mode": {"const": "language_multi"},
+                "languages": {
+                  "type": "array",
+                  "minItems": 2,
+                  "uniqueItems": true,
+                  "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}
+                },
+                "language_scope": {
+                  "const": "any",
+                  "description": "The construction sends no language (Deepgram language=multi), so the declaration lists none: it listens for every language the model declares and whatever the provider recognises beyond them."
+                },
+                "adapter_options": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["language"],
+                  "properties": {"language": {"const": "multi"}}
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "languages", "adapter_options"],
+              "properties": {
+                "mode": {"const": "language_identification"},
+                "languages": {
+                  "type": "array",
+                  "minItems": 2,
+                  "uniqueItems": true,
+                  "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}
+                },
+                "adapter_options": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["enable_language_identification"],
+                  "properties": {
+                    "enable_language_identification": {"const": true}
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "languages", "adapter_options"],
+              "properties": {
+                "mode": {"const": "strict_language_hints"},
+                "languages": {
+                  "type": "array",
+                  "minItems": 2,
+                  "uniqueItems": true,
+                  "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}
+                },
+                "adapter_options": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["language_hints", "language_hints_strict", "enable_language_identification"],
+                  "properties": {
+                    "language_hints": {
+                      "type": "array",
+                      "minItems": 2,
+                      "uniqueItems": true,
+                      "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}
+                    },
+                    "language_hints_strict": {"const": true},
+                    "enable_language_identification": {"const": true}
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "languages", "adapter_options", "max_candidates"],
+              "properties": {
+                "mode": {"const": "continuous_language_identification"},
+                "max_candidates": {"const": 10},
+                "languages": {
+                  "type": "array",
+                  "minItems": 2,
+                  "uniqueItems": true,
+                  "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}
+                },
+                "adapter_options": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["language_id_mode", "candidate_locales"],
+                  "properties": {
+                    "language_id_mode": {"const": "continuous"},
+                    "candidate_locales": {
+                      "type": "object",
+                      "minProperties": 2,
+                      "propertyNames": {"pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"},
+                      "additionalProperties": {
+                        "type": "string",
+                        "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provenance"],
+      "required": [
+        "provenance"
+      ],
       "properties": {
-        "description": {"type": "string"},
-        "tags": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
-        "gender": {"type": "string", "enum": ["female", "male", "nonbinary"]},
-        "accent_locale": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"},
+        "description": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "gender": {
+          "type": "string",
+          "enum": [
+            "female",
+            "male",
+            "nonbinary"
+          ]
+        },
+        "accent_locale": {
+          "type": "string",
+          "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+        },
         "provenance": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["source", "observed_at"],
+          "required": [
+            "source",
+            "observed_at"
+          ],
           "properties": {
-            "source": {"type": "string", "minLength": 1},
-            "observed_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "observed_at": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            }
           }
         }
       }
@@ -54,13 +526,36 @@
     "voice": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "languages", "metadata"],
+      "required": [
+        "id",
+        "name",
+        "languages",
+        "metadata"
+      ],
       "properties": {
-        "id": {"type": "string", "minLength": 1},
-        "name": {"type": "string", "minLength": 1},
-        "languages": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}},
-        "recommended": {"type": "boolean"},
-        "metadata": {"$ref": "#/$defs/metadata"}
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "languages": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+          }
+        },
+        "recommended": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "$ref": "#/$defs/metadata"
+        }
       }
     },
     "billing": {
@@ -68,33 +563,238 @@
       "unevaluatedProperties": false,
       "oneOf": [
         {
-          "required": ["unit", "price_micro_usd_per_unit", "reserve_units_per_minute"],
+          "required": [
+            "unit",
+            "price_micro_usd_per_unit",
+            "reserve_units_per_minute"
+          ],
+          "if": {
+            "properties": {
+              "unit": {
+                "enum": [
+                  "character",
+                  "utf8_byte"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "request_billing"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "request_billing"
+              ]
+            }
+          },
           "properties": {
-            "unit": {"type": "string", "enum": ["audio_second", "character", "utf8_byte"]},
-            "price_micro_usd_per_unit": {"type": "integer", "minimum": 0},
-            "reserve_units_per_minute": {"type": "integer", "minimum": 0},
-            "provider_price_basis": {"type": "string", "minLength": 1}
+            "unit": {
+              "type": "string",
+              "enum": [
+                "audio_second",
+                "character",
+                "utf8_byte"
+              ]
+            },
+            "price_micro_usd_per_unit": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reserve_units_per_minute": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "provider_price_basis": {
+              "type": "string",
+              "minLength": 1
+            },
+            "request_billing": {
+              "$ref": "#/$defs/request_billing"
+            }
           }
         },
         {
-          "required": ["unit", "rate_dimensions"],
+          "required": [
+            "unit",
+            "rate_dimensions"
+          ],
           "properties": {
-            "unit": {"const": "token"},
+            "unit": {
+              "const": "token"
+            },
             "rate_dimensions": {
               "type": "array",
               "minItems": 1,
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["name", "price_micro_usd_per_unit", "reserve_units_per_minute"],
+                "required": [
+                  "name",
+                  "price_micro_usd_per_unit",
+                  "reserve_units_per_minute"
+                ],
                 "properties": {
-                  "name": {"type": "string", "enum": ["input_audio_tokens", "output_text_tokens", "input_text_tokens", "output_audio_tokens"]},
-                  "price_micro_usd_per_unit": {"type": "integer", "minimum": 0},
-                  "reserve_units_per_minute": {"type": "integer", "minimum": 0}
+                  "name": {
+                    "type": "string",
+                    "enum": [
+                      "input_audio_tokens",
+                      "output_text_tokens",
+                      "input_text_tokens",
+                      "output_audio_tokens"
+                    ]
+                  },
+                  "price_micro_usd_per_unit": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "reserve_units_per_minute": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
                 }
               }
             },
-            "provider_price_basis": {"type": "string", "minLength": 1}
+            "provider_price_basis": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "request_billing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "completed",
+        "abandoned",
+        "transport_failure",
+        "provider_error",
+        "source"
+      ],
+      "properties": {
+        "completed": {
+          "const": "submitted_units"
+        },
+        "abandoned": {
+          "type": "string",
+          "enum": [
+            "submitted_units",
+            "none"
+          ]
+        },
+        "transport_failure": {
+          "type": "string",
+          "enum": [
+            "submitted_units",
+            "none"
+          ]
+        },
+        "provider_error": {
+          "type": "string",
+          "enum": [
+            "submitted_units",
+            "none"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "reported_request_billing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "completed",
+        "abandoned",
+        "transport_failure",
+        "provider_error",
+        "source"
+      ],
+      "properties": {
+        "completed": {
+          "const": "reported_usage"
+        },
+        "abandoned": {
+          "type": "string",
+          "enum": [
+            "reported_usage",
+            "none"
+          ]
+        },
+        "transport_failure": {
+          "type": "string",
+          "enum": [
+            "reported_usage",
+            "none"
+          ]
+        },
+        "provider_error": {
+          "type": "string",
+          "enum": [
+            "reported_usage",
+            "none"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "declared_billing": {
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": [
+            "unit",
+            "request_billing"
+          ],
+          "properties": {
+            "unit": {
+              "type": "string",
+              "enum": [
+                "character",
+                "utf8_byte"
+              ]
+            },
+            "request_billing": {
+              "$ref": "#/$defs/request_billing"
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": [
+            "unit",
+            "dimensions",
+            "request_billing"
+          ],
+          "properties": {
+            "unit": {
+              "const": "token"
+            },
+            "dimensions": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "input_text_tokens",
+                  "output_audio_tokens"
+                ]
+              }
+            },
+            "request_billing": {
+              "$ref": "#/$defs/reported_request_billing"
+            }
           }
         }
       ]
@@ -102,32 +802,131 @@
     "credential": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["managed_env", "byok_supported", "validation"],
+      "required": [
+        "managed_env",
+        "byok_supported",
+        "validation"
+      ],
       "properties": {
-        "managed_env": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
-        "byok_supported": {"type": "boolean"},
-        "validation": {"type": "string", "enum": ["soniox_models", "fish_wallet"]}
+        "managed_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "byok_supported": {
+          "type": "boolean"
+        },
+        "validation": {
+          "type": "string",
+          "enum": [
+            "soniox_models",
+            "openai_models",
+            "fish_wallet",
+            "cartesia_voices",
+            "azure_speech_token",
+            "azure_speech_voices"
+          ]
+        }
       }
     },
     "capability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["component", "provider", "registry_name", "model", "display", "languages", "streaming", "runnable", "selectable", "catalog", "credential", "billing"],
+      "required": [
+        "component",
+        "provider",
+        "registry_name",
+        "model",
+        "display",
+        "languages",
+        "streaming",
+        "runnable",
+        "selectable",
+        "catalog",
+        "credential",
+        "billing"
+      ],
       "properties": {
-        "component": {"type": "string", "enum": ["stt", "tts"]},
-        "provider": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
-        "registry_name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
-        "model": {"type": "string", "minLength": 1},
-        "display": {"type": "string", "minLength": 1},
-        "languages": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"}},
-        "streaming": {"type": "boolean"},
-        "runnable": {"type": "boolean"},
-        "selectable": {"type": "boolean"},
-        "catalog": {"type": "boolean"},
-        "typical_latency_ms": {"type": "integer", "minimum": 0},
-        "credential": {"$ref": "#/$defs/credential"},
-        "billing": {"$ref": "#/$defs/billing"},
-        "voices": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/voice"}}
+        "component": {
+          "type": "string",
+          "enum": [
+            "stt",
+            "tts"
+          ]
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "registry_name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display": {
+          "type": "string",
+          "minLength": 1
+        },
+        "languages": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+          }
+        },
+        "streaming": {
+          "type": "boolean"
+        },
+        "runnable": {
+          "type": "boolean"
+        },
+        "selectable": {
+          "type": "boolean"
+        },
+        "catalog": {
+          "type": "boolean"
+        },
+        "typical_latency_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "credential": {
+          "$ref": "#/$defs/credential"
+        },
+        "billing": {
+          "$ref": "#/$defs/billing"
+        },
+        "simultaneous_recognition": {
+          "$ref": "#/$defs/declared_stack_language/properties/simultaneous_recognition"
+        },
+        "voice_inventory": {
+          "type": "string",
+          "enum": [
+            "static",
+            "provider_cache"
+          ]
+        },
+        "locales": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+          }
+        },
+        "language_identification": {
+          "$ref": "#/$defs/declared_stack_language/properties/language_identification"
+        },
+        "voices": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/voice"
+          }
+        }
       }
     }
   }

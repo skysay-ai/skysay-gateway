@@ -7,6 +7,7 @@ import wave
 from pathlib import Path
 
 from livekit_agent.control_plane import (
+    BrowserSessionAlreadyOwned,
     ControlPlaneRejected,
     Gate2CallSession,
     Gate2ControlPlaneAdapter,
@@ -43,6 +44,7 @@ def _config(*, tools: list[str] | None = None, language: str = "en") -> dict:
         "first_message": "Hello",
         "tools": tools or [],
         "recording_enabled": True,
+        "content_storage": "skysay",
         "transcriber": {"registry_name": "deepgram", "model": "nova-3", "language": language},
         "model": {"registry_name": "gemini", "model": "gemini-2.5-flash-lite"},
         "voice": {
@@ -69,9 +71,17 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
             transport=transport,
         )
 
+    def _managed_adapter(self, transport: FakeTransport) -> Gate2ControlPlaneAdapter:
+        # The usage route belongs to the managed media worker alone.
+        return Gate2ControlPlaneAdapter(
+            gateway_id="gateway_1",
+            transport=transport,
+            platform_transport=transport,
+        )
+
     def test_outbound_dispatch_contains_identifiers_but_no_credentials(self) -> None:
         metadata = json.dumps({
-            "schema": "openphonex.outbound-dispatch.v1",
+            "schema": "skysay.outbound-dispatch.v1",
             "call_id": "call_1",
             "agent_id": "agent_1",
             "from_number_id": "number_1",
@@ -83,7 +93,7 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         self.assertEqual(dispatch.call_id, "call_1")
         self.assertIsNone(parse_outbound_dispatch(""))
         with self.assertRaisesRegex(ValueError, "omitted required fields"):
-            parse_outbound_dispatch(json.dumps({"schema": "openphonex.outbound-dispatch.v1"}))
+            parse_outbound_dispatch(json.dumps({"schema": "skysay.outbound-dispatch.v1"}))
 
     def test_policy_authorization_and_config_precede_media(self) -> None:
         transport = FakeTransport(
@@ -122,6 +132,97 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         self.assertTrue(session.media_admitted)
         self.assertEqual(session.audit_events[:4], ["authorization_allowed", "realtime_config_loaded", "authorization_consumed", "media_admitted"])
 
+    def test_a_job_admitted_as_a_live_call_test_says_so_when_it_claims(self) -> None:
+        """Design 8.1: the control plane binds the phone host's branch to the call."""
+        config = _config()
+        config.update({"call_id": "call_browser_1", "direction": "web_test"})
+        transport = FakeTransport([{"ok": True, "status": "live", "call_id": "call_browser_1"}, config])
+        adapter = Gate2ControlPlaneAdapter(gateway_id="gateway_1", transport=FakeTransport([]),
+                                           platform_transport=transport)
+        adapter.prepare_workspace_browser_test(call_id="call_browser_1", agent_id="agent_1",
+                                               organization_id="org_1", project_id="project_1",
+                                               admission="live_call_test")
+        self.assertEqual(transport.calls[0], ("POST", "/v1/platform-media/browser-sessions/call_browser_1/claim",
+                                              {"admission": "live_call_test"}))
+
+    def test_workspace_browser_test_claims_ownership_before_loading_config(self) -> None:
+        config = _config()
+        config.update({"call_id": "call_browser_1", "direction": "web_test"})
+        transport = FakeTransport(
+            [
+                {"ok": True, "status": "live", "call_id": "call_browser_1"},
+                config,
+            ]
+        )
+        adapter = Gate2ControlPlaneAdapter(
+            gateway_id="gateway_1",
+            transport=FakeTransport([]),
+            platform_transport=transport,
+        )
+
+        session = adapter.prepare_workspace_browser_test(
+            call_id="call_browser_1",
+            agent_id="agent_1",
+            organization_id="org_1",
+            project_id="project_1",
+        )
+
+        self.assertTrue(session.media_admitted)
+        self.assertEqual(
+            transport.calls,
+            [
+                (
+                    "POST",
+                    "/v1/platform-media/browser-sessions/call_browser_1/claim",
+                    {},
+                ),
+                ("GET", "/v1/calls/call_browser_1/realtime-config", None),
+            ],
+        )
+
+    def test_workspace_browser_test_refuses_a_malformed_claim(self) -> None:
+        transport = FakeTransport([{"ok": True, "status": "settled", "call_id": "call_browser_1"}])
+        adapter = Gate2ControlPlaneAdapter(
+            gateway_id="gateway_1",
+            transport=FakeTransport([]),
+            platform_transport=transport,
+        )
+
+        with self.assertRaisesRegex(ControlPlaneRejected, "claim was not accepted"):
+            adapter.prepare_workspace_browser_test(
+                call_id="call_browser_1",
+                agent_id="agent_1",
+                organization_id="org_1",
+                project_id="project_1",
+            )
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_workspace_browser_test_distinguishes_an_existing_live_owner(self) -> None:
+        transport = FakeTransport(
+            [
+                {
+                    "ok": False,
+                    "status": "live",
+                    "already_owned": True,
+                    "call_id": "call_browser_1",
+                }
+            ]
+        )
+        adapter = Gate2ControlPlaneAdapter(
+            gateway_id="gateway_1",
+            transport=FakeTransport([]),
+            platform_transport=transport,
+        )
+
+        with self.assertRaises(BrowserSessionAlreadyOwned):
+            adapter.prepare_workspace_browser_test(
+                call_id="call_browser_1",
+                agent_id="agent_1",
+                organization_id="org_1",
+                project_id="project_1",
+            )
+        self.assertEqual(len(transport.calls), 1)
+
     def _admitted(self, **overrides) -> dict:
         response = {
             "authorized": True,
@@ -138,7 +239,7 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
                 "number_id": "number_1",
                 "from_phone_number": "+15551230000",
                 "to_phone_number": "+37255509999",
-                "outbound_trunk_name": "openphonex-didlogic-pa_1",
+                "outbound_trunk_name": "skysay-didlogic-pa_1",
             },
             "call": {"id": "call_1", "status": "dialing"},
         }
@@ -154,7 +255,7 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
 
         self.assertEqual(token, "tca_once")
         self.assertEqual(dial_plan["call_id"], "call_1")
-        self.assertEqual(dial_plan["outbound_trunk_name"], "openphonex-didlogic-pa_1")
+        self.assertEqual(dial_plan["outbound_trunk_name"], "skysay-didlogic-pa_1")
         method, path, body = transport.calls[0]
         self.assertEqual((method, path), ("POST", "/v1/gateway-deployments/gateway_1/outbound-calls"))
         # The workspace is never named by the box: the control plane reads it
@@ -233,6 +334,58 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
                     "purpose": "platform_release_canary",
                     "source_e164": "+15551230001",
                     "target_e164": "+15551230000",
+                    "call_id": "platform-release-canary-servermint",
+                    "config": _config(tools=[]),
+                }
+            ]
+        )
+        adapter = Gate2ControlPlaneAdapter(
+            gateway_id="gateway_1",
+            transport=FakeTransport([]),
+            platform_transport=transport,
+        )
+        session = adapter.prepare_platform_release_canary(
+            {
+                "purpose": "platform_release_canary",
+                "source_e164": "+15551230001",
+                "target_e164": "+15551230000",
+            },
+            "carrier-leg-1",
+        )
+        # The session adopts the control plane's minted correlation id, so the
+        # release host reads back exactly this session's terminal state file.
+        self.assertEqual(session.call_id, "platform-release-canary-servermint")
+        session.admit_media()
+        self.assertEqual(session.tool_definitions(), [])
+        self.assertEqual(session.lease_component_credentials(), {})
+        self.assertEqual(session.report_lifecycle(event_type="sip.answered")["status"], "platform_release_canary")
+        self.assertEqual(session.complete(source_path=Path("."))["artifact_import"]["status"], "platform_release_canary")
+        # The carrier leg id is the only field sent -- so a retransmitted
+        # dispatch replays the claim its own leg spent. The correlation call_id
+        # is minted server-side and returned, never described by the request.
+        self.assertEqual(
+            transport.calls,
+            [
+                (
+                    "POST",
+                    "/v1/platform-media/release-canary/route",
+                    {"provider_call_id": "carrier-leg-1"},
+                )
+            ],
+        )
+
+    def test_release_canary_session_falls_back_when_no_call_id_is_returned(self) -> None:
+        """A control plane predating the correlation change returns no call_id.
+        The session must still construct -- with a locally minted id -- so a
+        voice-first release does not die against the older control plane; the
+        run then proves the call on its conversation evidence alone.
+        """
+        transport = FakeTransport(
+            [
+                {
+                    "purpose": "platform_release_canary",
+                    "source_e164": "+15551230001",
+                    "target_e164": "+15551230000",
                     "config": _config(tools=[]),
                 }
             ]
@@ -251,24 +404,37 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
             "carrier-leg-1",
         )
         self.assertTrue(session.call_id.startswith("platform-release-canary-"))
-        session.admit_media()
-        self.assertEqual(session.tool_definitions(), [])
-        self.assertEqual(session.lease_component_credentials(), {})
-        self.assertEqual(session.report_lifecycle(event_type="sip.answered")["status"], "platform_release_canary")
-        self.assertEqual(session.complete(source_path=Path("."))["artifact_import"]["status"], "platform_release_canary")
-        # The carrier leg identity is sent so a retransmitted dispatch replays
-        # the claim its own leg spent. It is the only field: the worker
-        # describes which leg it is, never what the route should be.
-        self.assertEqual(
-            transport.calls,
+
+    def test_release_canary_session_rejects_an_unsafe_returned_call_id(self) -> None:
+        """A malformed control-plane call_id must never name a file path; the
+        session drops it and mints its own instead of adopting a traversal.
+        """
+        transport = FakeTransport(
             [
-                (
-                    "POST",
-                    "/v1/platform-media/release-canary/route",
-                    {"provider_call_id": "carrier-leg-1"},
-                )
-            ],
+                {
+                    "purpose": "platform_release_canary",
+                    "source_e164": "+15551230001",
+                    "target_e164": "+15551230000",
+                    "call_id": "../../etc/passwd",
+                    "config": _config(tools=[]),
+                }
+            ]
         )
+        adapter = Gate2ControlPlaneAdapter(
+            gateway_id="gateway_1",
+            transport=FakeTransport([]),
+            platform_transport=transport,
+        )
+        session = adapter.prepare_platform_release_canary(
+            {
+                "purpose": "platform_release_canary",
+                "source_e164": "+15551230001",
+                "target_e164": "+15551230000",
+            },
+            "carrier-leg-1",
+        )
+        self.assertTrue(session.call_id.startswith("platform-release-canary-"))
+        self.assertNotIn("/", session.call_id)
 
     def test_the_release_route_runs_without_caller_side_recording(self) -> None:
         """The platform route has no recording, and must still be runnable.
@@ -375,13 +541,84 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
 
     def test_denied_authorization_never_fetches_config_or_admits_media(self) -> None:
         transport = FakeTransport([{"authorized": False, "token": None, "decision": {"decision": "blocked"}}])
-        with self.assertRaises(ControlPlaneRejected):
+        # The REASON, not merely the exception type. A denial and a malformed
+        # allowed answer both raise ControlPlaneRejected, so asserting the type
+        # alone passes even when the denial branch is gone -- the next guard
+        # catches the same input for a different reason and the test cannot
+        # tell. Pinning the message is what makes this test about the denial.
+        with self.assertRaisesRegex(ControlPlaneRejected, "authorization was denied"):
             self._adapter(transport).prepare_outbound(
                 call_id="call_1",
                 agent_id="agent_1",
                 from_number_id="number_1",
                 to_e164="+15551230002",
                 metadata={"purpose": "cold_sales"},
+            )
+        self.assertEqual(len(transport.calls), 1)
+
+    def _authorized(self, **overrides) -> dict:
+        """A well-formed allowed answer from the queue-path authorization route."""
+        response = {
+            "authorized": True,
+            "call_id": "call_1",
+            "token": "tca_once",
+            "decision": {"decision": "allowed"},
+        }
+        response.update(overrides)
+        return response
+
+    def test_queue_admission_refuses_an_allowed_answer_with_no_usable_token(self) -> None:
+        """The queue tail's twin of the local tail's tokenless-answer refusal.
+
+        Both originators end in the same session builder, so both have to
+        refuse the same malformed answers before reaching it. These were the
+        local path's; this pins the queue path's, so the two cannot drift into
+        validating different things one layer above a shared dialer.
+        """
+        for token in ("", None, 7):
+            with self.subTest(token=token):
+                transport = FakeTransport([self._authorized(token=token)])
+                with self.assertRaisesRegex(
+                    ControlPlaneRejected, "omitted the call id or single-use token"
+                ):
+                    self._adapter(transport).prepare_outbound(
+                        call_id="call_1",
+                        agent_id="agent_1",
+                        from_number_id="number_1",
+                        to_e164="+15551230002",
+                        metadata={"purpose": "support"},
+                    )
+                # Refused before the config fetch, so nothing was built from it.
+                self.assertEqual(len(transport.calls), 1)
+
+    def test_queue_admission_refuses_an_allowed_answer_with_no_call_id(self) -> None:
+        for call_id in ("", None):
+            with self.subTest(call_id=call_id):
+                transport = FakeTransport([self._authorized(call_id=call_id)])
+                with self.assertRaisesRegex(
+                    ControlPlaneRejected, "omitted the call id or single-use token"
+                ):
+                    self._adapter(transport).prepare_outbound(
+                        call_id="call_1",
+                        agent_id="agent_1",
+                        from_number_id="number_1",
+                        to_e164="+15551230002",
+                        metadata={"purpose": "support"},
+                    )
+                self.assertEqual(len(transport.calls), 1)
+
+    def test_queue_admission_refuses_a_token_bound_to_another_call(self) -> None:
+        """A token minted for a different call must never open this session."""
+        transport = FakeTransport([self._authorized(call_id="call_other")])
+        with self.assertRaisesRegex(
+            ControlPlaneRejected, "not bound to the session call id"
+        ):
+            self._adapter(transport).prepare_outbound(
+                call_id="call_1",
+                agent_id="agent_1",
+                from_number_id="number_1",
+                to_e164="+15551230002",
+                metadata={"purpose": "support"},
             )
         self.assertEqual(len(transport.calls), 1)
 
@@ -548,7 +785,7 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
             [
                 {
                     "name": "end_call",
-                    "description": "End the phone call politely once the caller's needs are met.",
+                    "description": "Request a polite hang-up when the caller needs nothing else. The request can be canceled by caller activity; listen, then retry when they are finished. Only a committed hang-up is final.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -562,6 +799,25 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
             ],
         )
         self.assertEqual(transport.calls, [])
+
+    def test_a_transfer_also_offers_the_callback_tool(self) -> None:
+        transport = FakeTransport([])
+        session = Gate2CallSession(
+            transport=transport,
+            authorization_transport=transport,
+            tool_transport=transport,
+            call_id="call_transfer",
+            gateway_id="gateway_1",
+            authorization_call_id="",
+            call_authorization_token="",
+            config=_config(tools=[{"type": "builtin", "name": "transfer_to_human", "phone_number": "+12025550100"}]),
+            media_admitted=True,
+        )
+        self.assertEqual(
+            [tool["name"] for tool in session.tool_definitions()],
+            ["transfer_to_human", "cancel_transfer", "request_callback"],
+        )
+        self.assertIn("request_callback", session.allowed_tools)
 
     def test_tool_execution_emits_only_safe_telemetry_correlation(self) -> None:
         transport = FakeTransport(
@@ -670,7 +926,14 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
             )
             self.assertNotIn("artifacts_imported", session.audit_events)
 
-            for name in ("caller.wav", "agent.wav", "mixed.wav", "turn-001-caller.wav", "turn-001-agent.wav"):
+            for name in (
+                "caller.wav",
+                "agent.wav",
+                "mixed.wav",
+                "opening-agent.wav",
+                "turn-001-caller.wav",
+                "turn-001-agent.wav",
+            ):
                 _write_wav(root / name)
             (root / "transcript.json").write_text(
                 json.dumps(
@@ -688,6 +951,11 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
             collector.observe_user(text="private caller text", metrics={"transcription_delay": 0.2})
             collector.observe_assistant(text="private assistant text", metrics={"e2e_latency": 0.4})
             collector.write(root / "call-telemetry.json")
+            # The carrier-leg statistics the worker attached ride the same
+            # bundle as the telemetry.
+            (root / "sip-call-statistics.json").write_text(
+                json.dumps({"schema": "skysay.sip_call_statistics.v1", "status": "unavailable", "reason": "capture_not_configured", "captured": {}})
+            )
             result = session.complete(
                 source_path=root,
                 duration_sources={"sip_participant": 12.0, "room_track": 11.8, "recording": 11.5},
@@ -699,7 +967,9 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         self.assertEqual(transport.calls[-1][:2], ("POST", "/v1/calls/call_1/artifacts"))
         self.assertNotIn("duration_seconds", artifact_payload)
         self.assertIn("duration-provenance.json", {part["filename"] for part in artifact_payload["parts"]})
+        self.assertIn("opening-agent.wav", {part["filename"] for part in artifact_payload["parts"]})
         self.assertIn("call-telemetry.json", {part["filename"] for part in artifact_payload["parts"]})
+        self.assertIn("sip-call-statistics.json", {part["filename"] for part in artifact_payload["parts"]})
         self.assertNotIn("private caller text", json.dumps(artifact_payload))
         self.assertNotIn("private assistant text", json.dumps(artifact_payload))
         self.assertEqual(session.audit_events[-1], "artifacts_imported")
@@ -716,7 +986,7 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
                 {"canonical_type": "call.ended", "duplicate": False, "billing": {"status": "settled"}},
             ]
         )
-        session = self._adapter(transport).prepare_outbound(
+        session = self._managed_adapter(transport).prepare_outbound(
             call_id="call_1", agent_id="agent_1", from_number_id="number_1", to_e164="+15551230001", metadata={}
         )
         session.admit_media()
@@ -741,6 +1011,37 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
         paths = [path for _method, path, _payload in transport.calls]
         self.assertLess(paths.index("/v1/calls/call_1/billing-usage"), paths.index("/v1/gateway-deployments/gateway_1/call-lifecycle-events"))
         self.assertIn("component_usage_reported", session.audit_events)
+
+    def test_refused_metering_is_posted_on_its_own_route_not_sip_ended(self) -> None:
+        transport = FakeTransport(
+            [
+                {"authorized": True, "call_id": "call_1", "token": "tca_once", "decision": {"decision": "allowed"}},
+                _config(),
+                {"call_id": "call_1", "status": "consumed"},
+                {"call_id": "call_1", "duplicate": False},
+                {"canonical_type": "call.ended", "duplicate": False, "billing": {"status": "awaiting_usage"}},
+            ]
+        )
+        session = self._adapter(transport).prepare_outbound(
+            call_id="call_1", agent_id="agent_1", from_number_id="number_1", to_e164="+15551230001", metadata={}
+        )
+        session.admit_media()
+        session.report_refused_metering(
+            {
+                "reason": "Azure TTS usage omitted billable-character evidence",
+                "records": [{"type": "tts_usage", "provider": "Azure", "model": "neural", "characters_count": 311}],
+                "counters": {"tts_submitted_characters": 0},
+            }
+        )
+        session.report_lifecycle(
+            event_id="sip-end-1",
+            event_type="sip.ended",
+            source_component="livekit_sip",
+        )
+        paths = [path for _method, path, _payload in transport.calls]
+        self.assertIn("/v1/calls/call_1/refused-metering", paths)
+        self.assertNotIn("component_usage", json.dumps(transport.calls[-1][2]))
+        self.assertIn("refused_metering_reported", session.audit_events)
 
     def test_terminal_payment_due_is_an_authoritative_billing_verdict(self) -> None:
         """A completed call with an explicit above-reserve balance must not
@@ -801,7 +1102,7 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
                 {"canonical_type": "call.ended", "duplicate": False, "billing": {"status": "settled"}},
             ]
         )
-        session = self._adapter(transport).prepare_outbound(
+        session = self._managed_adapter(transport).prepare_outbound(
             call_id="call_1", agent_id="agent_1", from_number_id="number_1", to_e164="+15551230001", metadata={}
         )
         session.admit_media()
@@ -845,7 +1146,7 @@ class Gate2ControlPlaneAdapterTests(unittest.TestCase):
                 {"canonical_type": "call.ended", "duplicate": False, "billing": {"status": "settled"}},
             ]
         )
-        session = self._adapter(transport).prepare_outbound(
+        session = self._managed_adapter(transport).prepare_outbound(
             call_id="call_1", agent_id="agent_1", from_number_id="number_1", to_e164="+15551230001", metadata={}
         )
         session.admit_media()
@@ -1156,6 +1457,213 @@ class UrllibJsonTransportHardeningTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+
+class _CountingServer:
+    """A real loopback HTTP server that records which connection served each request.
+
+    ``keep_alive`` serves HTTP/1.1 with a Content-Length, as the Cloudflare
+    edge in front of api.skysay.ai does; otherwise HTTP/1.0, one request per
+    connection. ``close_after`` makes the server drop a connection, without
+    a ``Connection: close``, after that many responses on it.
+    """
+
+    def __init__(self, *, keep_alive=True, close_after=None, routes=None):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.requests: list[tuple[int, str, str, bytes]] = []
+        self.accepted = 0
+        lock, counts, owner = threading.Lock(), {}, self
+        routes = routes or {}
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1" if keep_alive else "HTTP/1.0"
+
+            def _serve(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length) if length else b""
+                port = self.client_address[1]
+                with lock:
+                    owner.requests.append((port, self.command, self.path, body))
+                    counts[port] = counts.get(port, 0) + 1
+                    served = counts[port]
+                status, extra, payload = routes.get(self.path, (200, {}, {"path": self.path, "echo": body.decode()}))
+                encoded = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                for name, value in extra.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(encoded)
+                self.wfile.flush()
+                if close_after is not None and served >= close_after:
+                    self.close_connection = True
+
+            do_GET = do_POST = _serve
+
+            def log_message(self, *_args):
+                return
+
+        class Server(ThreadingHTTPServer):
+            daemon_threads = True
+
+            def get_request(self):
+                accepted = super().get_request()
+                with lock:
+                    owner.accepted += 1
+                return accepted
+
+        self.server = Server(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def ports(self):
+        return [port for port, *_ in self.requests]
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class UrllibJsonTransportKeepAliveTests(unittest.TestCase):
+    """Back-to-back control-plane requests share one connection (keep-alive).
+
+    Each test drives the real ``UrllibJsonTransport`` against a real loopback
+    server and counts the connections the server accepted.
+    """
+
+    def serve(self, **options):
+        server = _CountingServer(**options)
+        self.addCleanup(server.close)
+        return server, UrllibJsonTransport(base_url=server.base_url, bearer_token="token-1")
+
+    def test_five_sequential_requests_share_one_connection(self):
+        server, transport = self.serve()
+        for index in range(5):
+            self.assertEqual(transport.request("POST", f"/v1/step/{index}", {"n": index}),
+                             {"path": f"/v1/step/{index}", "echo": json.dumps({"n": index}, sort_keys=True)})
+        self.assertEqual(len(server.requests), 5, "every request reached the server exactly once")
+        self.assertEqual(server.accepted, 1)
+        self.assertEqual(len(set(server.ports())), 1)
+
+    def test_a_server_that_closes_each_connection_gets_one_per_request(self):
+        # Negative control: the counter can see more than one connection.
+        server, transport = self.serve(keep_alive=False)
+        for index in range(3):
+            transport.request("GET", f"/v1/step/{index}")
+        self.assertEqual((len(server.requests), server.accepted), (3, 3))
+
+    def test_a_connection_the_server_dropped_while_idle_is_never_written_to(self):
+        server, transport = self.serve(close_after=1)
+        transport.request("POST", "/v1/first", {"n": 1})
+        import time as _time
+        _time.sleep(0.2)  # the server's close reaches the idle socket
+        self.assertEqual(transport.request("POST", "/v1/second", {"n": 2})["path"], "/v1/second")
+        self.assertEqual([path for _, _, path, _ in server.requests], ["/v1/first", "/v1/second"])
+        self.assertEqual(server.accepted, 2)
+
+    def test_a_close_racing_the_write_fails_once_and_is_never_replayed(self):
+        # The close the readiness check cannot see: it lands after the check
+        # and before the write. Here the check is forced to miss it.
+        from unittest import mock
+        import http.client
+        import time as _time
+        from livekit_agent import control_plane
+
+        server, transport = self.serve(close_after=1)
+        transport.request("POST", "/v1/claim", {"n": 1})
+        _time.sleep(0.2)
+        with mock.patch.object(control_plane._IdleConnections, "_quiet", staticmethod(lambda _connection: True)):
+            with self.assertRaises((OSError, http.client.HTTPException)):
+                transport.request("POST", "/v1/start", {"n": 2})
+        self.assertEqual([path for _, _, path, _ in server.requests], ["/v1/claim"],
+                         "the failed request was replayed")
+        self.assertEqual(transport.request("POST", "/v1/next", {"n": 3})["path"], "/v1/next")
+        self.assertEqual([path for _, _, path, _ in server.requests], ["/v1/claim", "/v1/next"])
+
+    def test_a_response_whose_body_stalls_closes_its_socket_with_the_error(self):
+        import socket
+        import threading
+
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        self.addCleanup(listener.close)
+        closed_by_client = threading.Event()
+
+        def serve():
+            connection, _ = listener.accept()
+            with connection:
+                connection.recv(65536)
+                connection.sendall(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                                   b"Content-Length: 10\r\n\r\n{}")
+                connection.settimeout(5)
+                try:
+                    if connection.recv(1) == b"":
+                        closed_by_client.set()
+                except OSError:
+                    closed_by_client.set()
+        threading.Thread(target=serve, daemon=True).start()
+        transport = UrllibJsonTransport(base_url=f"http://127.0.0.1:{listener.getsockname()[1]}",
+                                        bearer_token="token-1", timeout_seconds=0.3)
+        held = None
+        try:
+            transport.request("GET", "/v1/stall")
+        except Exception as error:  # noqa: BLE001 - kept with its traceback, which assertRaises would clear
+            held = error
+        self.assertIsInstance(held, OSError)
+        self.assertTrue(closed_by_client.wait(3), "the stalled response kept its socket open")
+        del held
+
+    def test_a_connection_idle_past_the_bound_is_closed_not_reused(self):
+        from unittest import mock
+        from livekit_agent import control_plane
+
+        server, transport = self.serve()
+        transport.request("GET", "/v1/a")
+        with mock.patch.object(control_plane, "KEEPALIVE_IDLE_SECONDS", 0.0):
+            transport.request("GET", "/v1/b")
+        transport.request("GET", "/v1/c")
+        self.assertEqual(server.accepted, 2, "the expired connection was replaced, its successor reused")
+
+    def test_an_error_response_keeps_its_body_and_closes_its_connection(self):
+        body = {"error": "delivery_conflict", "reason": "x" * 2_000}
+        server, transport = self.serve(routes={"/v1/conflict": (409, {}, body)})
+        transport.request("GET", "/v1/ok")
+        with self.assertRaises(ControlPlaneRejected) as raised:
+            transport.request("POST", "/v1/conflict", {"n": 1})
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.error_code, "delivery_conflict")
+        transport.request("GET", "/v1/after")
+        # The error went out on the pooled connection; it closed with the
+        # error, so the next request opened a new one.
+        self.assertEqual(server.accepted, 2)
+        self.assertEqual(server.ports()[0], server.ports()[1])
+        self.assertNotEqual(server.ports()[1], server.ports()[2])
+
+    def test_a_server_asking_to_close_is_not_reused(self):
+        server, transport = self.serve(routes={"/v1/close": (200, {"Connection": "close"}, {"ok": True})})
+        self.assertEqual(transport.request("GET", "/v1/close"), {"ok": True})
+        transport.request("GET", "/v1/next")
+        self.assertEqual(server.accepted, 2)
+
+    def test_a_same_origin_redirect_is_still_followed(self):
+        server, transport = self.serve(routes={"/v1/old": (302, {"Location": "/v1/new"}, {})})
+        self.assertEqual(transport.request("GET", "/v1/old")["path"], "/v1/new")
+        self.assertEqual([path for _, _, path, _ in server.requests], ["/v1/old", "/v1/new"])
+
+    def test_concurrent_requests_never_share_a_connection_at_once(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        server, transport = self.serve()
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(lambda i: transport.request("POST", f"/v1/c/{i}", {"i": i}), range(30)))
+        self.assertEqual([result["path"] for result in results], [f"/v1/c/{i}" for i in range(30)])
+        self.assertEqual(len(server.requests), 30)
+        self.assertLessEqual(server.accepted, 6)
 
 
 if __name__ == "__main__":

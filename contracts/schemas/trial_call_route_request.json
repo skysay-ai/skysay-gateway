@@ -33,7 +33,7 @@
     },
     "live_media": {
       "type": "boolean",
-      "description": "Alias: live. LiveKit media is gated by OPENPHONEX_LIVE_CALLS_ENABLED and OPENPHONEX_VOICE_LIVE_ENABLED."
+      "description": "Alias: live. LiveKit media is gated by SKYSAY_LIVE_CALLS_ENABLED and SKYSAY_VOICE_LIVE_ENABLED."
     },
     "live": {
       "type": "boolean"

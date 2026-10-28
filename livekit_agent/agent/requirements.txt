@@ -1,9 +1,32 @@
 # SPDX-License-Identifier: Apache-2.0
-livekit-agents==1.6.6
-livekit-plugins-deepgram==1.6.6
-livekit-plugins-elevenlabs==1.6.6
-livekit-plugins-fishaudio==1.6.6
-livekit-plugins-google==1.6.6
-livekit-plugins-silero==1.6.6
-livekit-plugins-soniox==1.6.6
-livekit-plugins-turn-detector==1.6.6
+livekit-agents[openai]==1.8.8
+livekit-plugins-openai==1.8.8
+livekit-plugins-deepgram==1.8.8
+livekit-plugins-azure==1.8.8
+livekit-plugins-cartesia==1.8.8
+livekit-plugins-elevenlabs==1.8.8
+livekit-plugins-fishaudio==1.8.8
+livekit-plugins-google==1.8.8
+livekit-plugins-silero==1.8.8
+livekit-plugins-soniox==1.8.8
+livekit-plugins-turn-detector==1.8.8
+# The listening mix (livekit_evidence.py) is numpy array arithmetic, so the
+# evidence write releases the GIL and never starves the live calls' loop.
+# Keep the DSP dependency fixed independently of SDK upgrades.
+numpy==2.5.3
+# TTS native metering counts a WebSocket frame when it is handed to the socket
+# (native_tts_usage.hand_off): aiohttp's writer puts an uncompressed frame on
+# the transport before its first await, so a send the worker cancels was
+# already handed. native_usage_selftest.py proves that property at image build;
+# pin the version it was proven on so a resolver drift cannot change it.
+aiohttp==3.14.5
+# Gemini TTS dispatches every request through the meter's admission gate: an
+# explicit httpx transport, which also selects google-genai's httpx path (no
+# aiohttp reconnect-and-resend of its own). tts_request_billing_selftest.py
+# proves both at image build; pin the versions it was proven on.
+google-genai==2.31.0
+httpx==0.28.1
+# Crash reporting for the worker (its ``error_tracking`` module). Inert without
+# SKYSAY_GLITCHTIP_DSN, and its transport is a background thread with a
+# bounded queue, so it can never block the audio path.
+sentry-sdk==2.69.1

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Unigox OÜ
 #
-# OpenPhonex Gateway — public-repo CI (gateway-only). This is the CI that ships
+# Skysay Gateway — public-repo CI (gateway-only). This is the CI that ships
 # in the PUBLIC export; it builds and tests ONLY the two first-party packages
 # with the control plane absent, proving the self-containment guarantee.
 name: CI
@@ -20,14 +20,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install ffmpeg (optional realtime transcode runtime dependency)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-      - name: Install packages (base — no heavy local-model extras)
+      - name: Install first-party packages
         run: |
           python -m pip install --upgrade pip
-          pip install ./packages/openphonex-common ./packages/openphonex-gateway
+          pip install ./packages/skysay-common ./packages/skysay-gateway
+          # The voice worker's listening mix (livekit_agent/livekit_evidence.py),
+          # imported by its tests; the version the worker image pins.
+          pip install numpy==2.5.3
       - name: Import-light guarantee (no control plane on PYTHONPATH)
-        run: python -c "import openphonex_gateway, openphonex_common"
+        run: python -c "import skysay_gateway, skysay_common"
       - name: Run gateway test suite
         run: python -m unittest discover -s tests
 
@@ -43,8 +44,8 @@ jobs:
           python - <<'PY'
           import sys
           from pathlib import Path
-          roots = [Path("packages/openphonex-gateway/openphonex_gateway"),
-                   Path("packages/openphonex-common/openphonex_common")]
+          roots = [Path("packages/skysay-gateway/skysay_gateway"),
+                   Path("packages/skysay-common/skysay_common")]
           missing = []
           for root in roots:
               for p in root.rglob("*.py"):

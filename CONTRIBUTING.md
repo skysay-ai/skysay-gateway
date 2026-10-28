@@ -1,6 +1,6 @@
-# Contributing to OpenPhonex Gateway
+# Contributing to Skysay Gateway
 
-Thanks for your interest in the OpenPhonex Gateway.
+Thanks for your interest in the Skysay Gateway.
 
 ## Licensing of contributions
 
@@ -14,16 +14,16 @@ attribution intact.
 ## Scope of this repository
 
 This repository is the **media plane** only — the self-hostable LiveKit stack
-(`livekit_agent/` + `packages/openphonex-gateway/deploy/`), the shared
-realtime pipeline / provider library, and the gateway↔Cloud contract. The
-OpenPhonex Cloud control plane (numbers, KYB/compliance, billing, abuse
+(`livekit_agent/` + `packages/skysay-gateway/deploy/`), the portable
+evidence/RTP package, and the gateway↔Cloud contract. The
+Skysay Cloud control plane (numbers, KYB/compliance, billing, abuse
 policy) is a separate, private system and is intentionally out of scope here.
 
 ## Development
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
-pip install -e packages/openphonex-common -e packages/openphonex-gateway
+pip install -e packages/skysay-common -e packages/skysay-gateway numpy==2.5.3
 
 # run the tests (no control plane, no network, no providers required):
 python -m unittest discover -s tests

@@ -1,0 +1,22 @@
+{
+  "schema": "skysay.caller_transcript_timing.v1",
+  "description": "How a transcriber's caller transcripts are timed against the caller's speech, per engine. A call whose engine has a row joins each caller item to the one speaking interval its FIRST interim can describe; a voice-to-voice engine with no row gets no caller clips. Adding an engine is one row, measured on real calls first.",
+  "fields": {
+    "first_interim_min_latency_seconds": "An interval that opened later than this before an item's first interim cannot be the speech that interim describes.",
+    "first_interim_max_latency_seconds": "Only an interval that opened between the minimum and this before the first interim can be joined.",
+    "first_interim_lookback_seconds": "Any interval that opened between the maximum and this before the first interim may be the item's own speech after an unusually late interim (even one another item was joined to: the engine can split one utterance into several items), so the item is left untimed.",
+    "utterance_gap_seconds": "Caller intervals closer than this are one utterance for widening an item's clip: the engine's own segmentation gap less the caller VAD's under-read of a pause."
+  },
+  "engines": {
+    "gpt_live": {
+      "first_interim_min_latency_seconds": 0.5,
+      "first_interim_max_latency_seconds": 2.0,
+      "first_interim_lookback_seconds": 3.0,
+      "utterance_gap_seconds": 0.5,
+      "evidence": "Measured 2026-09-27 on 20 local SIP-leg calls with scripted caller audio and known truth: first interims arrived p05 1.05 s, p50 1.35 s, p95 2.55 s after the speech began (unsplit items 1.08-1.61 s); the engine segments at 0.8 s of quiet and the caller VAD under-reads a pause by about 0.3 s. The 3.0 s lookback left 11 of 213 otherwise-correct items untimed on those calls, and no clip wrong."
+    }
+  },
+  "unlisted_engines": {
+    "gemini_live": "No row: its one interim per item arrives after the caller stops (p50 2.85 s after the speech began on 6 local calls, spread wide), so no window can say which interval it names. Its caller turns stay untimed until it is measured."
+  }
+}

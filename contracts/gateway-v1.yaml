@@ -1,21 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
-# OpenPhonex Gateway API v1 contract
+# Skysay Gateway API v1 contract
 #
-# The public contract between a self-hosted gateway and the OpenPhonex
+# The public contract between a self-hosted gateway and the Skysay
 # control plane. Operations are marked `x-status: stable` (the frozen v1
 # surface, a backwards-compatibility guarantee) or `x-status: proposed`
 # (additive, not yet implemented). Request/response bodies for stable
 # operations are published as JSON Schemas in contracts/schemas/*.json.
 openapi: 3.1.0
 info:
-  title: OpenPhonex Gateway API
+  title: Skysay Gateway API
   version: 1.0.0
-  summary: Contract between external/self-hosted gateways and the OpenPhonex control plane.
+  summary: Contract between external/self-hosted gateways and the Skysay control plane.
   description: |
     ## Scope
 
     This contract covers the surface a self-hosted gateway uses to talk to the
-    OpenPhonex Cloud control plane:
+    Skysay Cloud control plane:
 
     * gateway-deployment registration and health reporting,
     * worker-job enqueue,
@@ -32,15 +32,15 @@ info:
     `<namespace>:*` wildcard.
 
     An inbound self-hosted stack uses ONE credential, sent as
-    `Authorization: Bearer`: the scoped **per-gateway token** (`tgw_...`,
-    `OPENPHONEX_GATEWAY_API_TOKEN`). It covers gateway-deployment operations —
+    `Authorization: Bearer`: the scoped **per-gateway token** (`skygw_...`,
+    `SKYSAY_GATEWAY_API_TOKEN`). It covers gateway-deployment operations —
     health/lifecycle reporting, number-rules sync, realtime-config reads and
     artifact upload — plus inbound call routing and MCP `tools/list` schema
     discovery. The organization it acts in is derived server-side from the
     token, never from the request body, and `tools/list` is the only MCP method
     it may call.
 
-    An **organization-scoped worker token** (`OPENPHONEX_WORKER_API_TOKEN`) is
+    An **organization-scoped worker token** (`SKYSAY_WORKER_API_TOKEN`) is
     still accepted where an install sets one, and is required by the optional
     outbound-dial profile. Protect it: it carries organization-wide authority
     (see SECURITY.md). Rotate either token via the token endpoints on
@@ -57,8 +57,8 @@ info:
     proposed: Additive design proposals; not implemented.
 
 servers:
-  - url: https://api.openphonex.com
-    description: OpenPhonex Cloud control plane.
+  - url: https://api.skysay.ai
+    description: Skysay Cloud control plane.
   - url: http://127.0.0.1:8765
     description: Local development server.
 
@@ -96,7 +96,9 @@ paths:
         flag was removed with the component price book). A provider account is
         auto-attached. Self-hosted
         deployments start as `awaiting_connection` with docker-compose instructions;
-        hosted ones as `active` with a generated `public_url`.
+        hosted ones as `active`. A gateway publishes no URL for the control plane:
+        the retired `public_url` / `local_status_url` fields are still accepted on
+        this request and ignored, and no longer appear on the response.
       x-required-scopes: ["gateways:write"]
       x-json-schema:
         request: contracts/schemas/gateway_deployment_create_request.json
@@ -126,7 +128,7 @@ paths:
         principal. NOTE (as-built): list rows are enriched with `gateway_health` but do
         NOT include the `pricing` object that single-resource GET adds.
         `gateway_health.status` is `connected` once the control plane has observed this
-        deployment's own `tgw_` token authenticate (`gateway_health.control_plane_last_seen_at`,
+        deployment's own `skygw_` token authenticate (`gateway_health.control_plane_last_seen_at`,
         derived from `gateway_tokens.last_used_at`). A self-hosted gateway posts no
         health report, so its readiness comes from that outbound contact, not from
         health-check artefacts; an explicitly FAILED check still overrides it.
@@ -324,7 +326,23 @@ paths:
           claims the oldest queued job of ANY organization
           (`require_organization_access` skips the check when organization_id is
           empty; `claim_worker_job`).
-        * `GET /v1/worker-heartbeats` under `worker_jobs:read` is not org-scoped.
+        * `GET /v1/worker-heartbeats` under `worker_jobs:read` is NOT org-scoped, and
+          that is deliberate: `worker_jobs:read` is outside `CUSTOMER_GRANTABLE_SCOPES`
+          and is withheld from the one tenant heartbeat preset
+          (`voice_outbound_worker` carries `worker_jobs:write` without it), so its
+          only holder is the release host's fleet verifier. Since  the WRITE
+          side is bound: `POST /v1/worker-heartbeats` takes the owner from the
+          credential and never from the body (naming another organization is `403`),
+          and a write whose `worker_id` is already registered to a different
+          organization is refused with `409` instead of overwriting it. Between
+          organizations ownership is first-write-wins and permanent, so two
+          deployments that both run the shipped default `worker_id` must configure
+          distinct ids; the platform's own in-process workers are not symmetric with
+          tenants and reclaim their fixed ids, which no tenant credential can write. The fleet
+          aggregate behind `/v1/readiness` stays cross-tenant for the same reason as
+          the listing -- it is an operator view and NOT an admission gate, so a
+          readiness check that must be tenant-safe reads heartbeats scoped to the
+          organization it is deciding for.
 
         Handing `worker_jobs:write` to a customer-hosted gateway therefore over-grants
         cross-tenant queue access. That is why the proposed section defines a
@@ -363,7 +381,7 @@ paths:
         call_session, emits `trial.pin_matched`, and either simulates media
         (`media_started`, demo artifacts) or - with `live_media=true` - enqueues a
         `call.inbound_bridge` worker job gated by the LiveKit call gates
-        (`OPENPHONEX_LIVE_CALLS_ENABLED` + `OPENPHONEX_VOICE_LIVE_ENABLED`). Returns the trial-call
+        (`SKYSAY_LIVE_CALLS_ENABLED` + `SKYSAY_VOICE_LIVE_ENABLED`). Returns the trial-call
         resource with `call_id`/`call` attached and status `succeeded`.
       x-required-scopes: ["trial_calls:write"]
       x-json-schema:
@@ -584,7 +602,8 @@ paths:
       operationId: importCallArtifacts
       summary: Import call artifacts from a local path (SAME-HOST-ONLY, deprecated for external gateways)
       description: |
-        Scope `recordings:write`.
+        Scopes `recordings:write` and `operator:write`: operator-only,
+        because `source_path` is read on the API host. Workspace keys get 403.
 
         **SAME-HOST-ONLY / DEPRECATED-FOR-EXTERNAL-GATEWAYS.** `source_path` is
         resolved on the API server's own filesystem. This works for the co-located
@@ -596,8 +615,9 @@ paths:
         Behavior: imports one or many artifact sets (wav/mp3/... + transcript.json +
         latency.json + waveform.json), stores objects under `imports/{call_id}/...`,
         creates/updates call_sessions, call_recordings, call_artifacts and call_turns,
-        and is idempotent per content-hash `provider_call_id`.
-      x-required-scopes: ["recordings:write"]
+        and is idempotent per content-hash `provider_call_id`. A `provider_call_id`
+        already imported by another organization answers 409.
+      x-required-scopes: ["recordings:write", "operator:write"]
       x-json-schema:
         request: contracts/schemas/call_artifact_import_request.json
         response: contracts/schemas/call_artifact_import_result.json
@@ -636,7 +656,7 @@ paths:
         `worker_jobs:enqueue`, `artifacts:upload`, `number-rules:read`); secret shown
         once at issuance. Issuance itself requires an org key with `gateways:write`
         (or an operator). Expected to be called once by the dashboard/CLI during
-        registration and stored on the gateway as `OPENPHONEX_GATEWAY_API_TOKEN`
+        registration and stored on the gateway as `SKYSAY_GATEWAY_API_TOKEN`
         (the env var already referenced by the self-hosted install plan).
       x-required-scopes: ["gateways:write"]
       parameters:
@@ -800,6 +820,57 @@ paths:
         default:
           $ref: "#/components/responses/Error"
 
+  /v1/calls/{call_id}/artifact-uploads:
+    post:
+      tags: [as-built]
+      x-status: stable
+      operationId: beginCallArtifactUpload
+      summary: "AS-BUILT: begin a chunked artifact upload for a long call's evidence bundle"
+      description: |
+        The single-request upload above carries the whole bundle in one body
+        and is capped at 32 MiB, which a call longer than about 8.7 minutes
+        exceeds. Media workers (the platform worker, or a gateway token with
+        `artifacts:upload`) use this session instead; a customer
+        `recordings:write` key is refused here.
+
+        1. `POST /v1/calls/{call_id}/artifact-uploads` with
+           `{"chunk_bytes": n, "parts": [{"filename", "bytes", "sha256"}],
+           "on_existing": "replace"|"refuse"}`. Every cap is enforced here, before
+           any byte: 32 MiB per part, 192 MiB per bundle, at most 512 parts,
+           64 KiB <= chunk_bytes <= 8 MiB (the `SKYSAY_MAX_ARTIFACT_*` variables
+           override them). Returns `{upload_id, status: open|finalized}`. The id is
+           derived from the manifest, so the same bundle is always the same upload.
+        2. `POST /v1/calls/{call_id}/artifact-uploads/{upload_id}/parts/{index}?offset=n`
+           with a raw `application/octet-stream` body of exactly
+           `min(chunk_bytes, bytes - offset)` bytes and an optional
+           `X-Content-SHA256`. A repeated chunk overwrites itself.
+        3. `POST /v1/calls/{call_id}/artifact-uploads/{upload_id}/finalize` verifies
+           every part's size and sha256 and runs the same import as the
+           single-request route (replace-in-place, idempotent). A finalize that
+           is repeated after it succeeded answers `{"imported": false, "reason":
+           "already_finalized"}` without importing or notifying again.
+        4. `POST /v1/calls/{call_id}/artifact-upload-failures` with
+           `{reason, stage, status_code?, total_bytes?, upload_id?}` records a
+           `call.artifacts.failed` event on the call (no webhook, at most five
+           per call) when a worker gives up.
+
+        Refusals answer `{"error": "artifact_upload_refused", "reason": <code>}`.
+        An API that predates these routes answers `begin` with its router's
+        unknown-path 404 (`{"error": "not_found", "path":...}`); a worker then
+        falls back to the single-request route.
+      x-required-scopes: ["artifacts:upload"]
+      parameters:
+        - name: call_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Upload session opened, or already finalized.
+        default:
+          $ref: "#/components/responses/Error"
+
   /v1/calls/{call_id}/realtime-config:
     get:
       tags: [as-built]
@@ -920,9 +991,15 @@ components:
   responses:
     Error:
       description: |
-        Error envelope. `error` is the Python
-        exception class name (e.g. UnauthorizedError=401, ForbiddenError=403,
-        BadRequestError=400, PayloadTooLargeError=413, KeyError/ValueError=500 today).
+        Error envelope. On a 4xx `error` is
+        the Python exception class name (e.g. UnauthorizedError=401,
+        ForbiddenError=403, BadRequestError=400, PayloadTooLargeError=413) unless
+        the error supplies its own body, which names a stable code instead
+        (TooManyRequestsError=429 answers `outbound_call_queue_full`). A 5xx
+        the service did not classify answers the fixed code `internal_error`, a
+        fixed message, and a `request_id` to quote to support; the failure's own
+        text goes to the error report, and the log line names the exception
+        class and that same `request_id`.
       content:
         application/json:
           schema:
@@ -936,6 +1013,7 @@ components:
       properties:
         error: {type: string}
         message: {type: string}
+        request_id: {type: string}
       required: [error, message]
 
     CallRealtimeConfig:
@@ -989,8 +1067,8 @@ components:
         provider_account_id: {type: string}
         region: {type: string}
         status: {type: string}
-        public_url: {type: string}
-        local_status_url: {type: string}
+        public_url: {type: string, deprecated: true}
+        local_status_url: {type: string, deprecated: true}
         gateway_version: {type: string}
       required: [organization_id, project_id]
 
@@ -1008,8 +1086,6 @@ components:
         plan_id: {type: string}
         status: {type: string}
         region: {type: string}
-        public_url: {type: string}
-        local_status_url: {type: string}
         monthly_base_minor: {type: integer}
         gateway_per_1000_minutes_minor: {type: integer}
         included_concurrent_calls: {type: integer}
@@ -1035,7 +1111,7 @@ components:
             PROPOSED FIELD (x-status: proposed, NOT IMPLEMENTED). direct_trunk: the
             provider trunk points straight at the customer gateway (today's implicit
             behavior for self-hosted gateways). cloud_bridged: media hairpins through
-            an OpenPhonex cloud bridge - DEFERRED, documented for completeness only.
+            an Skysay cloud bridge - DEFERRED, documented for completeness only.
           x-status: proposed
       required:
         - id
@@ -1059,8 +1135,8 @@ components:
         last_test_result: {type: object}
         version: {type: string}
         gateway_version: {type: string}
-        public_url: {type: string}
-        local_status_url: {type: string}
+        public_url: {type: string, deprecated: true}
+        local_status_url: {type: string, deprecated: true}
         reported_at: {type: string}
 
     GatewayCallLifecycleEventRequest:
@@ -1274,7 +1350,7 @@ components:
         recording: {type: object}
         route_mode:
           type: string
-          enum: [openphonex_agent, external_audio_agent, customer_sip_server, pstn_forward, disabled]
+          enum: [skysay_agent, external_audio_agent, customer_sip_server, pstn_forward, disabled]
         fallback: {type: object}
         internal_route: {type: object}
         latest_route_change: {type: [object, "null"]}
@@ -1326,30 +1402,30 @@ components:
       description: |
         AS-BUILT protocol object attached to live-call worker-job payloads as
         `media_metadata`. Names MUST start with
-        OPENPHONEX_. Values are sanitized: stringified, truncated to 160 chars,
+        SKYSAY_. Values are sanitized: stringified, truncated to 160 chars,
         chars outside [A-Za-z0-9_.:@/-] replaced with '_'.
       properties:
-        OPENPHONEX_CALL_DIRECTION:
+        SKYSAY_CALL_DIRECTION:
           type: string
           enum: [inbound, outbound]
           description: Always set by the control plane.
-        OPENPHONEX_ORGANIZATION_ID:
+        SKYSAY_ORGANIZATION_ID:
           type: string
           description: Always set by the control plane.
-        OPENPHONEX_CALL_ID: {type: string}
-        OPENPHONEX_PROJECT_ID: {type: string}
-        OPENPHONEX_NUMBER_ID: {type: string}
-        OPENPHONEX_AGENT_ID: {type: string}
-        OPENPHONEX_AGENT_ENDPOINT_ID: {type: string}
-        OPENPHONEX_PHONE_SERVER_ID: {type: string}
-        OPENPHONEX_TRIAL_CALL_ID: {type: string}
-        OPENPHONEX_MEDIA_PIPELINE:
+        SKYSAY_CALL_ID: {type: string}
+        SKYSAY_PROJECT_ID: {type: string}
+        SKYSAY_NUMBER_ID: {type: string}
+        SKYSAY_AGENT_ID: {type: string}
+        SKYSAY_AGENT_ENDPOINT_ID: {type: string}
+        SKYSAY_PHONE_SERVER_ID: {type: string}
+        SKYSAY_TRIAL_CALL_ID: {type: string}
+        SKYSAY_MEDIA_PIPELINE:
           type: string
           enum: [livekit]
-      required: [OPENPHONEX_CALL_DIRECTION, OPENPHONEX_ORGANIZATION_ID]
+      required: [SKYSAY_CALL_DIRECTION, SKYSAY_ORGANIZATION_ID]
       additionalProperties:
         type: string
-        description: Any additional OPENPHONEX_-prefixed variable passed by the enqueuer, post-sanitization.
+        description: Any additional SKYSAY_-prefixed variable passed by the enqueuer, post-sanitization.
 
     AudioContract:
       type: object

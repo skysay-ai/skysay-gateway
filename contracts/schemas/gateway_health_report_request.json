@@ -88,10 +88,13 @@
     },
     "public_url": {
       "type": "string",
-      "description": "Persisted onto the deployment row when present."
+      "deprecated": true,
+      "description": "Retired. Accepted and ignored so an already-deployed doctor keeps working; no longer persisted onto the deployment row and no longer returned in gateway_health. (A value posted here is still stored verbatim inside last_health_status, which is an opaque report blob.)"
     },
     "local_status_url": {
-      "type": "string"
+      "type": "string",
+      "deprecated": true,
+      "description": "Retired. Accepted and ignored; nothing on the control plane dials a gateway's local status URL."
     },
     "reported_at": {
       "type": "string",

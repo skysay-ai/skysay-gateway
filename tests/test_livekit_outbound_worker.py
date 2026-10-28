@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import types
 import unittest
 from unittest.mock import patch
@@ -90,6 +91,11 @@ class _Room:
     async def remove_participant(self, request):
         self.events.append(("remove_participant", request.room, request.identity))
 
+    async def list_participants(self, request):
+        # The dispatched agent joins at once; the dial waits for it.
+        self.events.append(("agent_joined", request.room))
+        return _Message(participants=[_Message(kind=4, identity="agent-AJ_test")])
+
 
 class _Dispatch:
     def __init__(self, events):
@@ -124,6 +130,7 @@ class _Api(types.SimpleNamespace):
             "SIPCodec",
             "DeleteRoomRequest",
             "RoomParticipantIdentity",
+            "ListParticipantsRequest",
         ):
             setattr(self, name, _Message)
 
@@ -133,10 +140,10 @@ def _settings(**overrides):
         livekit_url="ws://127.0.0.1:7880",
         livekit_api_key="key",
         livekit_api_secret="secret",
-        control_plane_url="https://api.openphonex.com",
+        control_plane_url="https://api.skysay.ai",
         gateway_id="gw_1",
-        gateway_token="tgw_secret",
-        worker_token="tai_secret",
+        gateway_token="skygw_faketoken",
+        worker_token="sky_faketoken",
         organization_id="org_1",
         worker_id="worker_1",
         trunk_name=worker.OUTBOUND_TRUNK_NAME,
@@ -169,6 +176,12 @@ def _job(**payload_overrides):
     }
 
 
+def _job_outcome_requests(transport):
+    """The complete/fail reports, ignoring the loop's own heartbeat."""
+
+    return [entry for entry in transport.requests if "/worker-jobs/" in entry[1]]
+
+
 class LiveKitOutboundWorkerTests(unittest.TestCase):
     def test_authorization_is_consumed_before_room_dispatch_and_dial(self):
         events = []
@@ -186,8 +199,40 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
         self.assertEqual(dial[1:3], ("15551230000", "+37255509999"))
         dispatch = next(item for item in events if isinstance(item, tuple) and item[0] == "dispatch")
         self.assertIn('"call_id": "call_1"', dispatch[3])
-        self.assertNotIn("tgw_secret", dispatch[3])
-        self.assertNotIn("tai_secret", dispatch[3])
+        self.assertNotIn("skygw_faketoken", dispatch[3])
+        self.assertNotIn("sky_faketoken", dispatch[3])
+
+    def _originate_with_join(self, list_participants):
+        events = []
+        _Adapter.events = events
+        api = _Api(events)
+        api.client.room.list_participants = list_participants
+        with patch.object(worker, "Gate2ControlPlaneAdapter", _Adapter), \
+             patch.object(worker, "_transports", return_value=(object(), object())), \
+             patch.object(worker, "_duration_limits", return_value={}), \
+             patch.object(worker, "AGENT_JOIN_TIMEOUT_SECONDS", 0.2):
+            with self.assertRaises(worker.OutboundPostAdmissionError):
+                asyncio.run(asyncio.wait_for(worker.originate_job(_settings(), _job(), api_module=api), timeout=5))
+        return events
+
+    def test_a_participant_list_that_never_answers_fails_the_call_without_a_dial(self):
+        # livekit-api sends each request with no timeout of its own.
+        async def never_answers(_request):
+            await asyncio.Event().wait()
+
+        events = self._originate_with_join(never_answers)
+        self.assertFalse(any(isinstance(item, tuple) and item[0] == "dial" for item in events))
+        self.assertIn("sip_failed_reported", events)
+        self.assertTrue(any(isinstance(item, tuple) and item[0] == "delete_room" for item in events))
+
+    def test_an_agent_reported_after_the_deadline_is_not_dialled(self):
+        async def answers_late(_request):
+            await asyncio.sleep(0.5)
+            return _Message(participants=[_Message(kind=4, identity="agent-AJ_test")])
+
+        events = self._originate_with_join(answers_late)
+        self.assertFalse(any(isinstance(item, tuple) and item[0] == "dial" for item in events))
+        self.assertIn("sip_failed_reported", events)
 
     def test_failed_dial_reports_terminal_lifecycle_and_deletes_room(self):
         events = []
@@ -227,8 +272,9 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
             result = asyncio.run(outbound.run_once())
 
         self.assertEqual(result["job_status"], "failed")
-        self.assertEqual(len(transport.requests), 1)
-        payload = transport.requests[0][2]
+        outcomes = _job_outcome_requests(transport)
+        self.assertEqual(len(outcomes), 1, "exactly one terminal settle, never a redial")
+        payload = outcomes[0][2]
         self.assertFalse(payload["retry"])
         self.assertEqual(payload["max_attempts"], 1)
 
@@ -243,7 +289,7 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
             async def list_outbound_trunk(self, _request):
                 return _Message(items=[
                     _Message(name=worker.OUTBOUND_TRUNK_NAME, sip_trunk_id="STO_DEFAULT", numbers=["15551230000"]),
-                    _Message(name="openphonex-didlogic-outbound", sip_trunk_id="STO_DIDLOGIC", numbers=["15551230000"]),
+                    _Message(name="skysay-didlogic-outbound", sip_trunk_id="STO_DIDLOGIC", numbers=["15551230000"]),
                 ])
 
             async def create_sip_participant(self, request, timeout=None):
@@ -257,7 +303,7 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
              patch.object(worker, "_duration_limits", return_value={}):
             result = asyncio.run(worker.originate_job(
                 _settings(),
-                _job(outbound_trunk_name="openphonex-didlogic-outbound"),
+                _job(outbound_trunk_name="skysay-didlogic-outbound"),
                 api_module=api,
             ))
 
@@ -313,7 +359,7 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
         with patch.object(worker, "originate_job", fail_with_cause):
             result = asyncio.run(outbound.run_once())
 
-        payload = transport.requests[0][2]
+        payload = _job_outcome_requests(transport)[0][2]
         self.assertEqual(payload["error"], "OutboundPostAdmissionError:OutboundWorkerError")
         self.assertNotIn("caller ID", payload["error"])
         self.assertFalse(payload["retry"])
@@ -339,7 +385,7 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
         with patch.object(worker, "originate_job", fail_plain):
             asyncio.run(outbound.run_once())
 
-        self.assertEqual(transport.requests[0][2]["error"], "OutboundWorkerError")
+        self.assertEqual(_job_outcome_requests(transport)[0][2]["error"], "OutboundWorkerError")
 
     def test_job_validation_rejects_disabled_live_gate(self):
         with self.assertRaisesRegex(worker.OutboundWorkerError, "live-call gate"):
@@ -355,14 +401,14 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
             async def list_outbound_trunk(self, _request):
                 return _Message(items=[
                     _Message(name=worker.OUTBOUND_TRUNK_NAME, sip_trunk_id="STO_DEFAULT", numbers=["15551230000"]),
-                    _Message(name="openphonex-didlogic-outbound", sip_trunk_id="STO_DIDLOGIC", numbers=["15551230000"]),
+                    _Message(name="skysay-didlogic-outbound", sip_trunk_id="STO_DIDLOGIC", numbers=["15551230000"]),
                 ])
 
         settings = _settings()
         api = _Api(events)
         api.client.sip = _TwoTrunkSip(events)
         trunk = asyncio.run(worker._select_outbound_trunk(
-            api.client, api, settings, "+15551230000", trunk_name="openphonex-didlogic-outbound",
+            api.client, api, settings, "+15551230000", trunk_name="skysay-didlogic-outbound",
         ))
         self.assertEqual(trunk.sip_trunk_id, "STO_DIDLOGIC")
         # Default stays the env-configured trunk when the job omits the name.
@@ -376,14 +422,14 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
         class _WrongNumberSip(_Sip):
             async def list_outbound_trunk(self, _request):
                 return _Message(items=[
-                    _Message(name="openphonex-didlogic-outbound", sip_trunk_id="STO_DIDLOGIC", numbers=["94711111001"]),
+                    _Message(name="skysay-didlogic-outbound", sip_trunk_id="STO_DIDLOGIC", numbers=["94711111001"]),
                 ])
 
         api = _Api(events)
         api.client.sip = _WrongNumberSip(events)
         with self.assertRaisesRegex(worker.OutboundWorkerError, "exactly one configured outbound trunk"):
             asyncio.run(worker._select_outbound_trunk(
-                api.client, api, _settings(), "+15551230000", trunk_name="openphonex-didlogic-outbound",
+                api.client, api, _settings(), "+15551230000", trunk_name="skysay-didlogic-outbound",
             ))
 
     def test_settings_keep_live_execution_off_by_default(self):
@@ -391,11 +437,11 @@ class LiveKitOutboundWorkerTests(unittest.TestCase):
             "LIVEKIT_URL": "ws://127.0.0.1:7880",
             "LIVEKIT_API_KEY": "key",
             "LIVEKIT_API_SECRET": "secret",
-            "OPENPHONEX_CONTROL_PLANE_URL": "https://api.openphonex.com",
-            "OPENPHONEX_GATEWAY_ID": "gw_1",
-            "OPENPHONEX_GATEWAY_API_TOKEN": "tgw_secret",
-            "OPENPHONEX_WORKER_API_TOKEN": "tai_secret",
-            "OPENPHONEX_ORGANIZATION_ID": "org_1",
+            "SKYSAY_CONTROL_PLANE_URL": "https://api.skysay.ai",
+            "SKYSAY_GATEWAY_ID": "gw_1",
+            "SKYSAY_GATEWAY_API_TOKEN": "skygw_faketoken",
+            "SKYSAY_WORKER_API_TOKEN": "sky_faketoken",
+            "SKYSAY_ORGANIZATION_ID": "org_1",
         }
         self.assertFalse(worker.OutboundWorkerSettings.from_environ(environ).execute)
 
@@ -407,10 +453,10 @@ class LocallyOriginatedCallTests(unittest.TestCase):
         "LIVEKIT_URL": "ws://127.0.0.1:7880",
         "LIVEKIT_API_KEY": "key",
         "LIVEKIT_API_SECRET": "secret",
-        "OPENPHONEX_CONTROL_PLANE_URL": "https://api.openphonex.com",
-        "OPENPHONEX_GATEWAY_ID": "gw_1",
-        "OPENPHONEX_GATEWAY_API_TOKEN": "tgw_secret",
-        "OPENPHONEX_ORGANIZATION_ID": "org_1",
+        "SKYSAY_CONTROL_PLANE_URL": "https://api.skysay.ai",
+        "SKYSAY_GATEWAY_ID": "gw_1",
+        "SKYSAY_GATEWAY_API_TOKEN": "skygw_faketoken",
+        "SKYSAY_ORGANIZATION_ID": "org_1",
     }
 
     def test_a_deployment_needs_no_organization_key_to_start(self):
@@ -419,7 +465,7 @@ class LocallyOriginatedCallTests(unittest.TestCase):
 
     def test_the_job_queue_still_says_which_credential_it_needs(self):
         settings = worker.OutboundWorkerSettings.from_environ(self.ENVIRON)
-        with self.assertRaisesRegex(worker.OutboundWorkerError, "OPENPHONEX_WORKER_API_TOKEN"):
+        with self.assertRaisesRegex(worker.OutboundWorkerError, "SKYSAY_WORKER_API_TOKEN"):
             worker._transports(settings)
 
     def test_admission_precedes_media_dispatch_and_the_dial(self):
@@ -447,7 +493,7 @@ class LocallyOriginatedCallTests(unittest.TestCase):
         dispatch = next(item for item in events if isinstance(item, tuple) and item[0] == "dispatch")
         self.assertIn('"call_id": "call_local"', dispatch[3])
         self.assertNotIn("tca_local", dispatch[3])
-        self.assertNotIn("tgw_secret", dispatch[3])
+        self.assertNotIn("skygw_faketoken", dispatch[3])
 
     def test_the_execution_gate_is_enforced_by_this_path_itself(self):
         """`docker compose run` ignores profiles, so the env gate is the gate."""
@@ -455,7 +501,7 @@ class LocallyOriginatedCallTests(unittest.TestCase):
         _Adapter.events = events
         with patch.object(worker, "Gate2ControlPlaneAdapter", _Adapter), \
              patch.object(worker, "_gateway_transport", return_value=object()):
-            with self.assertRaisesRegex(worker.OutboundWorkerError, "OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND"):
+            with self.assertRaisesRegex(worker.OutboundWorkerError, "SKYSAY_EXECUTE_LIVEKIT_OUTBOUND"):
                 asyncio.run(
                     worker.originate_local_call(
                         _settings(worker_token="", execute=False),
@@ -523,7 +569,7 @@ class LocallyOriginatedCallTests(unittest.TestCase):
     def test_the_originate_command_defaults_the_caller_id_to_the_served_number(self):
         environ = dict(self.ENVIRON)
         environ["SCH236_TEST_DID_E164"] = "+15551230000,+37255501234"
-        environ["OPENPHONEX_EXECUTE_LIVEKIT_OUTBOUND"] = "1"
+        environ["SKYSAY_EXECUTE_LIVEKIT_OUTBOUND"] = "1"
         placed = {}
 
         async def _placed(settings, **kwargs):
@@ -552,5 +598,250 @@ class LocallyOriginatedCallTests(unittest.TestCase):
                 worker.main(["originate", "--to", "+37255509999", "--purpose", "support"])
 
 
+class ContractRefusalTests(unittest.TestCase):
+    """The control plane refuses a worker on its contract before admission;
+    the job fails once, names the refusal, and never enters the retry loop."""
+
+    def _run(self, reason: str, mode: str = "organization"):
+        from livekit_agent.control_plane import ControlPlaneRejected
+
+        class _Transport:
+            def __init__(self):
+                self.requests = []
+
+            def request(self, method, path, payload):
+                self.requests.append((method, path, payload))
+                return {"status": "failed"}
+
+        transport = _Transport()
+        outbound = worker.OutboundWorker(_settings(worker_mode=mode))
+        outbound.worker_transport = transport
+        outbound.gateway_transport = transport
+        outbound.claim = lambda: _job()  # type: ignore[method-assign]
+
+        async def refused(*_args, **_kwargs):
+            # Raised the way UrllibJsonTransport._send raises it: from the
+            # HTTP error the control plane answered with, which is what the
+            # job's error code then carries beside the refusal reason.
+            import io
+            import urllib.error
+
+            http_error = urllib.error.HTTPError("http://127.0.0.1/v1/x", 409, "Conflict", {}, io.BytesIO(b"{}"))
+            raise ControlPlaneRejected("control plane returned HTTP 409: refused", status_code=409, reason=reason) from http_error
+
+        with patch.object(worker, "originate_job", refused):
+            result = asyncio.run(outbound.run_once())
+        return result, _job_outcome_requests(transport)
+
+    def test_a_contract_refusal_fails_the_job_once_and_names_the_check(self) -> None:
+        for reason in ("worker_contract_required", "call_contract_missing"):
+            with self.subTest(reason=reason):
+                result, outcomes = self._run(reason)
+                self.assertEqual(result["job_status"], "failed")
+                self.assertEqual(len(outcomes), 1)
+                payload = outcomes[0][2]
+                self.assertFalse(payload["retry"])
+                self.assertEqual(payload["max_attempts"], 1)
+                self.assertEqual(payload["error"], f"ControlPlaneRejected:HTTPError:{reason}")
+
+    def test_another_control_plane_rejection_keeps_its_retry(self) -> None:
+        # The contract set is exact: a different refusal is treated as before.
+        result, outcomes = self._run("route_missing")
+        self.assertEqual(result["job_status"], "failed")
+        payload = outcomes[0][2]
+        self.assertTrue(payload["retry"])
+        self.assertEqual(payload["error"], "ControlPlaneRejected:HTTPError")
+
+    def test_a_wrapped_refusal_is_still_recognised(self) -> None:
+        from livekit_agent.control_plane import ControlPlaneRejected
+
+        try:
+            raise worker.OutboundPostAdmissionError("ended after media authorization") from ControlPlaneRejected(
+                "refused", status_code=409, reason="call_contract_missing"
+            )
+        except worker.OutboundPostAdmissionError as exc:
+            self.assertEqual(worker.contract_refusal(exc), "call_contract_missing")
+            self.assertEqual(worker._job_error_code(exc), "OutboundPostAdmissionError:ControlPlaneRejected:call_contract_missing")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class SupervisorStallTests(unittest.TestCase):
+    """Organization mode has no overall originate deadline: every wait is bounded on its own."""
+
+    def _supervise(self, scenario, *, stall=None, originate=None, cap=None):
+        events = []
+        _Adapter.events = events
+        api = _Api(events)
+        entered = asyncio.Event()
+        if stall is not None:
+            service, method = stall
+
+            async def never_answers(*_args, **_kwargs):
+                entered.set()
+                await asyncio.Event().wait()
+
+            stalled = getattr(api.client, service)
+            real = getattr(stalled, method)
+            calls = []
+
+            async def first_call_never_answers(*args, **kwargs):
+                calls.append(1)
+                if len(calls) == 1:
+                    return await never_answers()
+                return await real(*args, **kwargs)
+
+            setattr(stalled, method, first_call_never_answers)
+        real_originate = worker.originate_job
+
+        async def originate_with_fakes(settings, job, **kwargs):
+            if originate is not None:
+                return await originate(entered, job, **kwargs)
+            return await real_originate(settings, job, api_module=api, **kwargs)
+
+        claims, settled = [], []
+
+        def claim():
+            claims.append(1)
+            return _job() | {"id": f"job_{len(claims)}"} if len(claims) <= 2 else None
+
+        def settle(job, action, payload):
+            settled.append((job["id"], action))
+            return {"id": job["id"], "status": "succeeded"}
+
+        patches = [
+            patch.object(worker, "Gate2ControlPlaneAdapter", _Adapter),
+            patch.object(worker, "_transports", return_value=(object(), object())),
+            patch.object(worker, "_duration_limits", return_value={}),
+            patch.object(worker, "originate_job", originate_with_fakes),
+            patch.object(worker, "LIVEKIT_RPC_TIMEOUT_SECONDS", 0.2),
+        ]
+        if cap is not None:
+            patches.append(patch.object(worker, "CLAIM_PACING_CAP_SECONDS", cap))
+        dialer = worker.OutboundWorker(_settings(max_in_flight=3, poll_seconds=0.01))
+        self.assertEqual(dialer.settings.worker_mode, "organization")
+        dialer.claim, dialer.heartbeat, dialer.settle = claim, (lambda _status: True), settle
+        stop = asyncio.Event()
+
+        async def run():
+            supervisor = asyncio.create_task(dialer._supervise(stop))
+            try:
+                return await scenario(supervisor, stop, entered, claims, settled, events)
+            finally:
+                stop.set()
+                await asyncio.wait_for(supervisor, timeout=5)
+
+        with contextlib.ExitStack() as stack:
+            for active in patches:
+                stack.enter_context(active)
+            return asyncio.run(run())
+
+    def test_a_stalled_livekit_call_before_the_join_ends_its_job_and_the_next_is_claimed(self):
+        for stall in (("sip", "list_outbound_trunk"), ("room", "create_room"), ("agent_dispatch", "create_dispatch")):
+            with self.subTest(stall=stall):
+
+                async def scenario(supervisor, stop, entered, claims, settled, events):
+                    await asyncio.wait_for(entered.wait(), timeout=5)
+                    for _ in range(300):
+                        if len([item for item in settled if item[1] != "renew"]) == 2:
+                            break
+                        await asyncio.sleep(0.01)
+                    return claims, settled, events
+
+                claims, settled, events = self._supervise(scenario, stall=stall)
+                self.assertGreaterEqual(len(claims), 2, "one stalled call stopped the originator claiming")
+                outcomes = dict(item for item in settled if item[1] != "renew")
+                self.assertEqual(outcomes, {"job_1": "fail", "job_2": "complete"})
+                self.assertEqual(len([item for item in events if isinstance(item, tuple) and item[0] == "dial"]), 1)
+
+    def test_a_stop_during_a_stall_drains_within_the_bound(self):
+        async def scenario(supervisor, stop, entered, claims, settled, events):
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            stop.set()
+            # The stalled call is never answered; its own deadline ends it.
+            await asyncio.wait_for(supervisor, timeout=2)
+            return settled, events
+
+        settled, events = self._supervise(scenario, stall=("room", "create_room"))
+        self.assertIn(("job_1", "fail"), settled)
+        self.assertFalse(any(isinstance(item, tuple) and item[0] == "dial" for item in events))
+
+    def test_a_job_that_neither_joins_nor_ends_holds_up_the_next_claim_only_until_the_cap(self):
+        hold: list[asyncio.Event] = []
+
+        async def originate(entered, job, **_kwargs):
+            if job["id"] == "job_1":
+                gate = asyncio.Event()
+                hold.append(gate)
+                entered.set()
+                await gate.wait()
+            return {"executed": True, "call_status": "answered"}
+
+        async def scenario(supervisor, stop, entered, claims, settled, events):
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            await asyncio.sleep(0.05)
+            before_cap = len(claims)
+            await asyncio.sleep(0.4)
+            after_cap = len(claims)
+            hold[0].set()
+            return before_cap, after_cap
+
+        before_cap, after_cap = self._supervise(scenario, originate=originate, cap=0.2)
+        self.assertEqual(before_cap, 1, "the next job was claimed before the first one's agent")
+        self.assertGreaterEqual(after_cap, 2, "one job stopped the originator claiming past the cap")
+
+    def test_the_pacing_cap_covers_every_bounded_step_before_a_join(self):
+        self.assertGreaterEqual(
+            worker.CLAIM_PACING_CAP_SECONDS,
+            4 * 10 + 3 * worker.LIVEKIT_RPC_TIMEOUT_SECONDS + worker.AGENT_JOIN_TIMEOUT_SECONDS,
+        )
+
+
+class HostedOriginateDeadlineTests(unittest.TestCase):
+    """The hosted deadline must outlast every bounded pre-dial step AND the dial's own timeout."""
+
+    def test_the_dial_keeps_its_whole_window_after_every_pre_dial_step_runs_to_its_bound(self):
+        import inspect
+
+        from livekit_agent.control_plane import UrllibJsonTransport
+
+        http = inspect.signature(UrllibJsonTransport).parameters["timeout_seconds"].default
+        pre_dial = 2 * http + 3 * worker.LIVEKIT_RPC_TIMEOUT_SECONDS + worker.AGENT_JOIN_TIMEOUT_SECONDS
+        self.assertEqual(worker.PRE_DIAL_BOUND_SECONDS, pre_dial)
+        for ringing in (15, 45, 120):
+            with self.subTest(ringing=ringing):
+                settings = _settings(ringing_timeout_seconds=ringing)
+                # The dial's own client timeout is ringing + 10 (create_sip_participant).
+                left_for_the_dial = worker._originate_deadline_seconds(settings) - pre_dial
+                self.assertGreater(left_for_the_dial, ringing + 10, "the deadline could cut off a ring timeout")
+
+    def test_the_hosted_originate_runs_under_that_deadline(self):
+        # Wiring at the call site: a hosted job's originate is cancelled at
+        # _originate_deadline_seconds, not at any other figure.
+        settled = []
+        started = []
+
+        async def never_finishes(*_args, **_kwargs):
+            started.append(1)
+            await asyncio.Event().wait()
+
+        dialer = worker.OutboundWorker(_settings(worker_mode="platform"))
+        job = _job() | {"claim_target": "platform", "lease_token": "lt_1", "locked_by": "worker_1",
+                        "lease_expires_at": "2999-01-01T00:00:00Z"}
+        dialer.settle = lambda job, action, payload: settled.append((action, payload)) or dict(job)
+
+        async def renew_forever(_job):
+            await asyncio.Event().wait()
+
+        with patch.object(worker, "originate_job", never_finishes), \
+             patch.object(worker, "_validate_job", lambda *_: {}), \
+             patch.object(worker, "_originate_deadline_seconds", lambda _settings: 0.2), \
+             patch.object(dialer, "_renew_until_settled", renew_forever):
+            result = asyncio.run(asyncio.wait_for(dialer.process_job(job, True), timeout=5))
+        self.assertEqual(started, [1])
+        self.assertEqual(result["error_type"], "TimeoutError", result)
+        failures = [payload for action, payload in settled if action == "fail"]
+        self.assertEqual(len(failures), 1, settled)
+        self.assertFalse(failures[0]["retry"], "a hosted originate cut off by its deadline must never be redialled")

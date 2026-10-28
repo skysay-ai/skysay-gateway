@@ -3,7 +3,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "error.json",
   "title": "API error envelope",
-  "description": "{error: exception class name, message: str(exc)}. Status code comes from exc.status_code (default 500).",
+  "description": "A stable `error` code with a human-readable `message`. A 4xx names the refusal. A 5xx that the service did not classify answers the fixed code `internal_error` with a fixed message and a `request_id` to quote to support; the failure's own text goes to the error report, and the log line names the exception class and that same `request_id`. Status code comes from exc.status_code (default 500).",
   "type": "object",
   "properties": {
     "error": {
@@ -11,6 +11,10 @@
     },
     "message": {
       "type": "string"
+    },
+    "request_id": {
+      "type": "string",
+      "description": "Correlation id for one failed request. Present on an unclassified 5xx."
     }
   },
   "required": [

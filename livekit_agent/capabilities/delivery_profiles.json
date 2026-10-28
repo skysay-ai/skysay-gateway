@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "table_version": "2026-09-05.2",
+  "profiles": {
+    "natural": {
+      "label": "Natural",
+      "summary": "Warm, varied cadence with restrained expressiveness."
+    },
+    "lively": {
+      "label": "Lively",
+      "summary": "Brighter delivery with more pace and emphasis variation."
+    },
+    "calm": {
+      "label": "Calm",
+      "summary": "Slower, softer and more consistent."
+    },
+    "precise": {
+      "label": "Precise",
+      "summary": "Stable delivery for names, dates, amounts and compliance-sensitive content."
+    }
+  },
+  "providers": {
+    "elevenlabs": {
+      "eleven_flash_v2_5": {
+        "control": "voice_settings",
+        "settings_contract": {
+          "required": [
+            "stability",
+            "similarity_boost"
+          ],
+          "allowed": [
+            "stability",
+            "similarity_boost",
+            "style",
+            "speed"
+          ]
+        },
+        "profiles": {
+          "natural": {
+            "stability": 0.45,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "speed": 1.0
+          },
+          "lively": {
+            "stability": 0.3,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "speed": 1.05
+          },
+          "calm": {
+            "stability": 0.65,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "speed": 0.95
+          },
+          "precise": {
+            "stability": 0.8,
+            "similarity_boost": 0.8,
+            "style": 0.0,
+            "speed": 0.97
+          }
+        }
+      },
+      "eleven_turbo_v2_5": {
+        "control": "voice_settings",
+        "settings_contract": {
+          "required": [
+            "stability",
+            "similarity_boost"
+          ],
+          "allowed": [
+            "stability",
+            "similarity_boost",
+            "style",
+            "speed"
+          ]
+        },
+        "profiles": {
+          "natural": {
+            "stability": 0.45,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "speed": 1.0
+          },
+          "lively": {
+            "stability": 0.3,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "speed": 1.05
+          },
+          "calm": {
+            "stability": 0.65,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "speed": 0.95
+          },
+          "precise": {
+            "stability": 0.8,
+            "similarity_boost": 0.8,
+            "style": 0.0,
+            "speed": 0.97
+          }
+        }
+      },
+      "eleven_v3": {
+        "control": "voice_settings",
+        "settings_contract": {
+          "required": [
+            "stability"
+          ],
+          "allowed": [
+            "stability"
+          ],
+          "discrete": {
+            "stability": [
+              0.0,
+              0.5,
+              1.0
+            ]
+          }
+        },
+        "profiles": {
+          "natural": {
+            "stability": 0.5
+          },
+          "lively": {
+            "stability": 0.0
+          },
+          "calm": {
+            "stability": 0.5
+          },
+          "precise": {
+            "stability": 1.0
+          }
+        }
+      },
+      "eleven_v4_turbo": {
+        "control": "voice_settings",
+        "settings_contract": {
+          "required": [
+            "stability",
+            "similarity_boost"
+          ],
+          "allowed": [
+            "stability",
+            "similarity_boost"
+          ]
+        },
+        "profiles": {
+          "natural": {
+            "stability": 0.45,
+            "similarity_boost": 0.75
+          },
+          "lively": {
+            "stability": 0.3,
+            "similarity_boost": 0.75
+          },
+          "calm": {
+            "stability": 0.65,
+            "similarity_boost": 0.75
+          },
+          "precise": {
+            "stability": 0.8,
+            "similarity_boost": 0.8
+          }
+        }
+      }
+    },
+    "gemini_tts": {
+      "gemini-2.5-flash-preview-tts": {
+        "control": "instruction",
+        "profiles": {
+          "natural": "Read the following text aloud exactly as written, in a warm, natural conversational voice at an even pace, and say nothing else",
+          "lively": "Read the following text aloud exactly as written, in a bright, upbeat and lively voice with clear emphasis, and say nothing else",
+          "calm": "Read the following text aloud exactly as written, in a calm, soft and unhurried voice, and say nothing else",
+          "precise": "Read the following text aloud exactly as written, clearly and steadily, pronouncing every name, number and date distinctly, and say nothing else"
+        }
+      },
+      "gemini-3.1-flash-tts-preview": {
+        "control": "instruction",
+        "profiles": {
+          "natural": "Read the following text aloud exactly as written, in a warm, natural conversational voice at an even pace, and say nothing else",
+          "lively": "Read the following text aloud exactly as written, in a bright, upbeat and lively voice with clear emphasis, and say nothing else",
+          "calm": "Read the following text aloud exactly as written, in a calm, soft and unhurried voice, and say nothing else",
+          "precise": "Read the following text aloud exactly as written, clearly and steadily, pronouncing every name, number and date distinctly, and say nothing else"
+        }
+      },
+      "gemini-3.8-flash-lite-tts": {
+        "control": "unsupported"
+      }
+    },
+    "soniox": {
+      "tts-rt-v2": {
+        "control": "speed",
+        "profiles": {
+          "natural": 1.0,
+          "lively": 1.08,
+          "calm": 0.92,
+          "precise": 0.95
+        }
+      }
+    },
+    "cartesia": {
+      "sonic-3.6": {
+        "control": "speed",
+        "profiles": {
+          "natural": 1.0,
+          "lively": 1.08,
+          "calm": 0.92,
+          "precise": 0.95
+        }
+      }
+    },
+    "fishaudio": {
+      "s2-pro": {
+        "control": "unsupported"
+      }
+    },
+    "azure_tts": {
+      "neural": {
+        "control": "unsupported"
+      }
+    }
+  }
+}

@@ -1,5 +1,5 @@
 # Runtime secrets and call artifacts — NEVER commit these. The self-host
-# quickstart (packages/openphonex-gateway/deploy/SELFHOST.md) has you create
+# quickstart (packages/skysay-gateway/deploy/SELFHOST.md) has you create
 # filled-in credential files and per-call directories from the *.example
 # templates; only the *.example templates belong in git.
 

@@ -1,0 +1,15 @@
+[project]
+name = "skysay-common"
+version = "0.1.0"
+description = "Control-plane-free shared primitives for Skysay (config + runtime helpers)."
+requires-python = "==3.13.*"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = []
+
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["skysay_common"]

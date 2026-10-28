@@ -34,12 +34,6 @@
     "region": {
       "type": "string"
     },
-    "public_url": {
-      "type": "string"
-    },
-    "local_status_url": {
-      "type": "string"
-    },
     "monthly_base_minor": {
       "type": "integer"
     },
@@ -140,12 +134,6 @@
         "version": {
           "type": "string"
         },
-        "public_url": {
-          "type": "string"
-        },
-        "local_status_url": {
-          "type": "string"
-        },
         "last_test_result": {
           "type": "object"
         },
@@ -159,7 +147,6 @@
         "next_action",
         "checks",
         "version",
-        "public_url",
         "last_test_result",
         "realtime"
       ]
@@ -193,8 +180,6 @@
     "plan_id",
     "status",
     "region",
-    "public_url",
-    "local_status_url",
     "monthly_base_minor",
     "gateway_per_1000_minutes_minor",
     "included_concurrent_calls",

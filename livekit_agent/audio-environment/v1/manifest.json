@@ -1,0 +1,487 @@
+{
+  "schema_version": 1,
+  "asset_version": "v1",
+  "licence": "CC0-1.0",
+  "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "provenance_checked_at": "2026-08-31",
+  "source_notes": "Freesound previews are publicly served author-licensed transcodes. No authentication, payment, broadcast extraction, speech synthesis or voice cloning used. Attribution is retained voluntarily despite CC0. CC0 does not waive unrelated privacy, publicity or trademark rights.",
+  "sources": [
+    {
+      "id": "quiet-office",
+      "file": "quiet-office.mp3",
+      "title": "Quiet office",
+      "author": "richwise",
+      "published_at": "2019-06-18",
+      "url": "https://freesound.org/people/richwise/sounds/474861/",
+      "download_url": "https://cdn.freesound.org/previews/474/474861_1481531-hq.mp3",
+      "description": "Field recording of a large open-plan office early in the morning; Zoom H1 internal microphones.",
+      "licence": "CC0-1.0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+      "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+      "sha256": "a253d2aab942239be91d532531bce1c4d19d7868d2de2938a6e4ce88659a9c29",
+      "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+    },
+    {
+      "id": "office-chatter",
+      "file": "call-centre.mp3",
+      "title": "Typing Office chatter in background",
+      "author": "SduggySounds",
+      "published_at": "2024-03-03",
+      "url": "https://freesound.org/people/SduggySounds/sounds/725718/",
+      "download_url": "https://cdn.freesound.org/previews/725/725718_12565192-hq.mp3",
+      "description": "Office keyboard, mouse clicks, air conditioning and distant chatter; recorded with Zoom H6.",
+      "licence": "CC0-1.0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+      "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+      "sha256": "c21e86b577c5dabf388c3376a6f6afe94e0849c87bf67f3577a3456af54a9c21",
+      "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+    },
+    {
+      "id": "cafe",
+      "file": "cafe.ogg",
+      "title": "Cafe ambiance.ogg",
+      "author": "Marble Toast",
+      "published_at": "2024-07-07",
+      "url": "https://commons.wikimedia.org/wiki/File:Cafe_ambiance.ogg",
+      "download_url": "https://upload.wikimedia.org/wikipedia/commons/5/54/Cafe_ambiance.ogg",
+      "description": "Uploader declares own work: background sound of a cafe with people chatting.",
+      "licence": "CC0-1.0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+      "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+      "sha256": "6360791fdcee1f64638f0fc9abd6d2c7a1aa75fd3d2b80033170a02d025099dc",
+      "download_format": "Original Ogg Vorbis upload"
+    },
+    {
+      "id": "street",
+      "file": "street.mp3",
+      "title": "Non Stop Street Ambience from Ramallah, Palestine.",
+      "author": "Mohammad Balawneh (sounds_from_palestine)",
+      "published_at": "2025-07-06",
+      "recorded_at": "2025-06-12",
+      "url": "https://freesound.org/people/sounds_from_palestine/sounds/815267/",
+      "download_url": "https://cdn.freesound.org/previews/815/815267_17247322-hq.mp3",
+      "description": "Daytime cars passing at different speeds/distances on Al Kulliyah Al Ahliya Street, Ramallah; Zoom H5 and Clippy microphones.",
+      "licence": "CC0-1.0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+      "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+      "sha256": "8cf268f61bb58c5e489043d000d84f1d69fed4383f64393811661f03e53d0ba5",
+      "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+    },
+    {
+      "id": "performed-gibberish",
+      "file": "gibberish.mp3",
+      "title": "Talking Gibberish.wav",
+      "author": "170026",
+      "published_at": "2017-11-04",
+      "url": "https://freesound.org/people/170026/sounds/407767/",
+      "download_url": "https://cdn.freesound.org/previews/407/407767_7159146-hq.mp3",
+      "description": "Original human performance of random words as if in conversation; not a recording of a television programme.",
+      "licence": "CC0-1.0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+      "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+      "sha256": "2a11c60c4812891aaee1821b0acd4b56d6ae1d56e1836ac34373286251c54439",
+      "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+    }
+  ],
+  "assets": [
+    {
+      "preset_id": "quiet-office",
+      "description": "Quiet office: a bounded excerpt of an early-morning open-plan office field recording.",
+      "kind": "processed_field_recording",
+      "layers": [
+        {
+          "source_id": "quiet-office",
+          "start_seconds": 45,
+          "gain": 1,
+          "filter": "highpass=f=70,lowpass=f=6500"
+        }
+      ],
+      "asset_version": "v1",
+      "filename": "quiet-office.wav",
+      "sha256": "29260998692917e4b3aa19432ad94657f5f4cb3cd724d6968eec99616bd58fef",
+      "sample_rate_hz": 24000,
+      "channels": 1,
+      "encoding": "pcm_s16le",
+      "container": "RIFF/WAVE",
+      "duration_ms": 20000,
+      "frame_count": 480000,
+      "loop": true,
+      "peak_dbfs": -12.100779900900596,
+      "rms_dbfs": -22.07637573090599,
+      "first_sample": 0,
+      "last_sample": 0,
+      "clipped_samples": 0,
+      "licence": "CC0-1.0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "rights_holder": [
+        "richwise"
+      ],
+      "created_at": "2026-08-31T21:04:35.201Z",
+      "source": [
+        {
+          "id": "quiet-office",
+          "file": "quiet-office.mp3",
+          "title": "Quiet office",
+          "author": "richwise",
+          "published_at": "2019-06-18",
+          "url": "https://freesound.org/people/richwise/sounds/474861/",
+          "download_url": "https://cdn.freesound.org/previews/474/474861_1481531-hq.mp3",
+          "description": "Field recording of a large open-plan office early in the morning; Zoom H1 internal microphones.",
+          "licence": "CC0-1.0",
+          "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+          "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+          "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+          "sha256": "a253d2aab942239be91d532531bce1c4d19d7868d2de2938a6e4ce88659a9c29",
+          "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+        }
+      ],
+      "transforms": [
+        "Decode public source to mono float PCM at 24000 Hz.",
+        "Select the declared 20.5-second source intervals; apply each declared FFmpeg filter.",
+        "RMS-normalize each source layer, then mix with the declared relative linear gain.",
+        "Apply smooth transient saturation tanh(mixed_sample / (3 * mixed_RMS)).",
+        "500 ms constant-power wrap crossfade; 2 ms endpoint fades to exact zero.",
+        "Normalize final peak to -12.1 dBFS and quantize to signed PCM16; write 20-second RIFF/WAVE."
+      ],
+      "qa": {
+        "format_and_signal_checked": true,
+        "listening_review_performed": false,
+        "listen_review_note": "Automated signal checks are not a human audition; review the audible programme/source content before accepting production assets."
+      }
+    },
+    {
+      "preset_id": "call-centre",
+      "description": "Designed layered office/chatter composite, not a field recording of a call centre. Office typing, mouse and ventilation with distant performed conversational babble.",
+      "kind": "designed_composite",
+      "layers": [
+        {
+          "source_id": "office-chatter",
+          "start_seconds": 15,
+          "gain": 1,
+          "filter": "highpass=f=100,lowpass=f=5500"
+        },
+        {
+          "source_id": "performed-gibberish",
+          "start_seconds": 35,
+          "gain": 0.8,
+          "filter": "highpass=f=180,lowpass=f=1900,aecho=0.8:0.9:60:0.2"
+        },
+        {
+          "source_id": "performed-gibberish",
+          "start_seconds": 78,
+          "gain": 0.6,
+          "filter": "highpass=f=220,lowpass=f=1500,aecho=0.8:0.9:95:0.15"
+        }
+      ],
+      "asset_version": "v1",
+      "filename": "call-centre.wav",
+      "sha256": "3c42545752117f0360aa8376c5a4ccfd2ba371bb35599df6290547126a26a2e9",
+      "sample_rate_hz": 24000,
+      "channels": 1,
+      "encoding": "pcm_s16le",
+      "container": "RIFF/WAVE",
+      "duration_ms": 20000,
+      "frame_count": 480000,
+      "loop": true,
+      "peak_dbfs": -12.100779900900596,
+      "rms_dbfs": -23.244871990359847,
+      "first_sample": 0,
+      "last_sample": 0,
+      "clipped_samples": 0,
+      "licence": "CC0-1.0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "rights_holder": [
+        "SduggySounds",
+        "170026"
+      ],
+      "created_at": "2026-08-31T21:04:35.707Z",
+      "source": [
+        {
+          "id": "office-chatter",
+          "file": "call-centre.mp3",
+          "title": "Typing Office chatter in background",
+          "author": "SduggySounds",
+          "published_at": "2024-03-03",
+          "url": "https://freesound.org/people/SduggySounds/sounds/725718/",
+          "download_url": "https://cdn.freesound.org/previews/725/725718_12565192-hq.mp3",
+          "description": "Office keyboard, mouse clicks, air conditioning and distant chatter; recorded with Zoom H6.",
+          "licence": "CC0-1.0",
+          "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+          "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+          "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+          "sha256": "c21e86b577c5dabf388c3376a6f6afe94e0849c87bf67f3577a3456af54a9c21",
+          "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+        },
+        {
+          "id": "performed-gibberish",
+          "file": "gibberish.mp3",
+          "title": "Talking Gibberish.wav",
+          "author": "170026",
+          "published_at": "2017-11-04",
+          "url": "https://freesound.org/people/170026/sounds/407767/",
+          "download_url": "https://cdn.freesound.org/previews/407/407767_7159146-hq.mp3",
+          "description": "Original human performance of random words as if in conversation; not a recording of a television programme.",
+          "licence": "CC0-1.0",
+          "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+          "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+          "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+          "sha256": "2a11c60c4812891aaee1821b0acd4b56d6ae1d56e1836ac34373286251c54439",
+          "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+        },
+        {
+          "id": "performed-gibberish",
+          "file": "gibberish.mp3",
+          "title": "Talking Gibberish.wav",
+          "author": "170026",
+          "published_at": "2017-11-04",
+          "url": "https://freesound.org/people/170026/sounds/407767/",
+          "download_url": "https://cdn.freesound.org/previews/407/407767_7159146-hq.mp3",
+          "description": "Original human performance of random words as if in conversation; not a recording of a television programme.",
+          "licence": "CC0-1.0",
+          "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+          "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+          "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+          "sha256": "2a11c60c4812891aaee1821b0acd4b56d6ae1d56e1836ac34373286251c54439",
+          "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+        }
+      ],
+      "transforms": [
+        "Decode public source to mono float PCM at 24000 Hz.",
+        "Select the declared 20.5-second source intervals; apply each declared FFmpeg filter.",
+        "RMS-normalize each source layer, then mix with the declared relative linear gain.",
+        "Apply smooth transient saturation tanh(mixed_sample / (3 * mixed_RMS)).",
+        "500 ms constant-power wrap crossfade; 2 ms endpoint fades to exact zero.",
+        "Normalize final peak to -12.1 dBFS and quantize to signed PCM16; write 20-second RIFF/WAVE."
+      ],
+      "qa": {
+        "format_and_signal_checked": true,
+        "listening_review_performed": false,
+        "listen_review_note": "Automated signal checks are not a human audition; review the audible programme/source content before accepting production assets."
+      }
+    },
+    {
+      "preset_id": "cafe",
+      "description": "Cafe: a bounded excerpt of the author's cafe background recording with people chatting.",
+      "kind": "processed_field_recording",
+      "layers": [
+        {
+          "source_id": "cafe",
+          "start_seconds": 60,
+          "gain": 1,
+          "filter": "highpass=f=90,lowpass=f=6500"
+        }
+      ],
+      "asset_version": "v1",
+      "filename": "cafe.wav",
+      "sha256": "70ceaf459883eaa22aa0fd63be109394ba347a37d1c386b917178b369cf0154c",
+      "sample_rate_hz": 24000,
+      "channels": 1,
+      "encoding": "pcm_s16le",
+      "container": "RIFF/WAVE",
+      "duration_ms": 20000,
+      "frame_count": 480000,
+      "loop": true,
+      "peak_dbfs": -12.100779900900596,
+      "rms_dbfs": -22.10815331290195,
+      "first_sample": 0,
+      "last_sample": 0,
+      "clipped_samples": 0,
+      "licence": "CC0-1.0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "rights_holder": [
+        "Marble Toast"
+      ],
+      "created_at": "2026-08-31T21:04:35.972Z",
+      "source": [
+        {
+          "id": "cafe",
+          "file": "cafe.ogg",
+          "title": "Cafe ambiance.ogg",
+          "author": "Marble Toast",
+          "published_at": "2024-07-07",
+          "url": "https://commons.wikimedia.org/wiki/File:Cafe_ambiance.ogg",
+          "download_url": "https://upload.wikimedia.org/wikipedia/commons/5/54/Cafe_ambiance.ogg",
+          "description": "Uploader declares own work: background sound of a cafe with people chatting.",
+          "licence": "CC0-1.0",
+          "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+          "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+          "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+          "sha256": "6360791fdcee1f64638f0fc9abd6d2c7a1aa75fd3d2b80033170a02d025099dc",
+          "download_format": "Original Ogg Vorbis upload"
+        }
+      ],
+      "transforms": [
+        "Decode public source to mono float PCM at 24000 Hz.",
+        "Select the declared 20.5-second source intervals; apply each declared FFmpeg filter.",
+        "RMS-normalize each source layer, then mix with the declared relative linear gain.",
+        "Apply smooth transient saturation tanh(mixed_sample / (3 * mixed_RMS)).",
+        "500 ms constant-power wrap crossfade; 2 ms endpoint fades to exact zero.",
+        "Normalize final peak to -12.1 dBFS and quantize to signed PCM16; write 20-second RIFF/WAVE."
+      ],
+      "qa": {
+        "format_and_signal_checked": true,
+        "listening_review_performed": false,
+        "listen_review_note": "Automated signal checks are not a human audition; review the audible programme/source content before accepting production assets."
+      }
+    },
+    {
+      "preset_id": "street",
+      "description": "Street: a bounded excerpt of a daytime Ramallah street field recording with passing traffic.",
+      "kind": "processed_field_recording",
+      "layers": [
+        {
+          "source_id": "street",
+          "start_seconds": 30,
+          "gain": 1,
+          "filter": "highpass=f=90,lowpass=f=6500"
+        }
+      ],
+      "asset_version": "v1",
+      "filename": "street.wav",
+      "sha256": "b7855ea2dc492cab23c1d8d3381fe387f4b089d39104e022a2d0e15e0b5476c8",
+      "sample_rate_hz": 24000,
+      "channels": 1,
+      "encoding": "pcm_s16le",
+      "container": "RIFF/WAVE",
+      "duration_ms": 20000,
+      "frame_count": 480000,
+      "loop": true,
+      "peak_dbfs": -12.100779900900596,
+      "rms_dbfs": -22.42213997235853,
+      "first_sample": 0,
+      "last_sample": 0,
+      "clipped_samples": 0,
+      "licence": "CC0-1.0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "rights_holder": [
+        "Mohammad Balawneh (sounds_from_palestine)"
+      ],
+      "created_at": "2026-08-31T21:04:36.205Z",
+      "source": [
+        {
+          "id": "street",
+          "file": "street.mp3",
+          "title": "Non Stop Street Ambience from Ramallah, Palestine.",
+          "author": "Mohammad Balawneh (sounds_from_palestine)",
+          "published_at": "2025-07-06",
+          "recorded_at": "2025-06-12",
+          "url": "https://freesound.org/people/sounds_from_palestine/sounds/815267/",
+          "download_url": "https://cdn.freesound.org/previews/815/815267_17247322-hq.mp3",
+          "description": "Daytime cars passing at different speeds/distances on Al Kulliyah Al Ahliya Street, Ramallah; Zoom H5 and Clippy microphones.",
+          "licence": "CC0-1.0",
+          "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+          "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+          "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+          "sha256": "8cf268f61bb58c5e489043d000d84f1d69fed4383f64393811661f03e53d0ba5",
+          "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+        }
+      ],
+      "transforms": [
+        "Decode public source to mono float PCM at 24000 Hz.",
+        "Select the declared 20.5-second source intervals; apply each declared FFmpeg filter.",
+        "RMS-normalize each source layer, then mix with the declared relative linear gain.",
+        "Apply smooth transient saturation tanh(mixed_sample / (3 * mixed_RMS)).",
+        "500 ms constant-power wrap crossfade; 2 ms endpoint fades to exact zero.",
+        "Normalize final peak to -12.1 dBFS and quantize to signed PCM16; write 20-second RIFF/WAVE."
+      ],
+      "qa": {
+        "format_and_signal_checked": true,
+        "listening_review_performed": false,
+        "listen_review_note": "Automated signal checks are not a human audition; review the audible programme/source content before accepting production assets."
+      }
+    },
+    {
+      "preset_id": "television",
+      "description": "Designed programme-like speech bed from CC0 nonsensical spoken material. A human voice performance filtered and reverberated to suggest a distant television; not broadcast TV or copied programme dialogue.",
+      "kind": "designed_composite",
+      "layers": [
+        {
+          "source_id": "performed-gibberish",
+          "start_seconds": 5,
+          "gain": 1,
+          "filter": "highpass=f=220,lowpass=f=2800,aecho=0.8:0.9:45|90:0.22|0.1"
+        },
+        {
+          "source_id": "quiet-office",
+          "start_seconds": 110,
+          "gain": 0.12,
+          "filter": "highpass=f=100,lowpass=f=1800"
+        }
+      ],
+      "asset_version": "v1",
+      "filename": "television.wav",
+      "sha256": "2acccccf95ca53404372a5c2b4db9aee49665320e0e53135f61e2032d6b3171b",
+      "sample_rate_hz": 24000,
+      "channels": 1,
+      "encoding": "pcm_s16le",
+      "container": "RIFF/WAVE",
+      "duration_ms": 20000,
+      "frame_count": 480000,
+      "loop": true,
+      "peak_dbfs": -12.100779900900596,
+      "rms_dbfs": -25.526770599439814,
+      "first_sample": 0,
+      "last_sample": 0,
+      "clipped_samples": 0,
+      "licence": "CC0-1.0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "rights_holder": [
+        "170026",
+        "richwise"
+      ],
+      "created_at": "2026-08-31T21:04:36.633Z",
+      "source": [
+        {
+          "id": "performed-gibberish",
+          "file": "gibberish.mp3",
+          "title": "Talking Gibberish.wav",
+          "author": "170026",
+          "published_at": "2017-11-04",
+          "url": "https://freesound.org/people/170026/sounds/407767/",
+          "download_url": "https://cdn.freesound.org/previews/407/407767_7159146-hq.mp3",
+          "description": "Original human performance of random words as if in conversation; not a recording of a television programme.",
+          "licence": "CC0-1.0",
+          "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+          "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+          "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+          "sha256": "2a11c60c4812891aaee1821b0acd4b56d6ae1d56e1836ac34373286251c54439",
+          "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+        },
+        {
+          "id": "quiet-office",
+          "file": "quiet-office.mp3",
+          "title": "Quiet office",
+          "author": "richwise",
+          "published_at": "2019-06-18",
+          "url": "https://freesound.org/people/richwise/sounds/474861/",
+          "download_url": "https://cdn.freesound.org/previews/474/474861_1481531-hq.mp3",
+          "description": "Field recording of a large open-plan office early in the morning; Zoom H1 internal microphones.",
+          "licence": "CC0-1.0",
+          "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+          "legalcode_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+          "rights_basis": "The named author/uploader publishes this sound under CC0 on the linked primary source page.",
+          "sha256": "a253d2aab942239be91d532531bce1c4d19d7868d2de2938a6e4ce88659a9c29",
+          "download_format": "Publicly served Freesound high-quality MP3 preview (not original WAV)"
+        }
+      ],
+      "transforms": [
+        "Decode public source to mono float PCM at 24000 Hz.",
+        "Select the declared 20.5-second source intervals; apply each declared FFmpeg filter.",
+        "RMS-normalize each source layer, then mix with the declared relative linear gain.",
+        "Apply smooth transient saturation tanh(mixed_sample / (3 * mixed_RMS)).",
+        "500 ms constant-power wrap crossfade; 2 ms endpoint fades to exact zero.",
+        "Normalize final peak to -12.1 dBFS and quantize to signed PCM16; write 20-second RIFF/WAVE."
+      ],
+      "qa": {
+        "format_and_signal_checked": true,
+        "listening_review_performed": false,
+        "listen_review_note": "Automated signal checks are not a human audition; review the audible programme/source content before accepting production assets."
+      }
+    }
+  ]
+}

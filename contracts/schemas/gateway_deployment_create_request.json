@@ -51,10 +51,14 @@
       "description": "Defaults to 'awaiting_connection' (self_hosted) or 'active' (hosted)."
     },
     "public_url": {
-      "type": "string"
+      "type": "string",
+      "deprecated": true,
+      "description": "Retired. Accepted and ignored so already-deployed clients keep working; the registered deployment publishes no URL and the response no longer carries this field."
     },
     "local_status_url": {
-      "type": "string"
+      "type": "string",
+      "deprecated": true,
+      "description": "Retired. Accepted and ignored so already-deployed clients keep working; nothing on the control plane dials a gateway's local status URL."
     },
     "gateway_version": {
       "type": "string"

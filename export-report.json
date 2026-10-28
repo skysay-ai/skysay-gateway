@@ -1,24 +1,28 @@
 {
-  "file_count": 127,
+  "file_count": 229,
   "files": {
     ".github/workflows/ci.yml": {
-      "bytes": 2044,
+      "bytes": 1999,
       "origin": "generate:github-ci.yml"
     },
     ".gitignore": {
-      "bytes": 876,
+      "bytes": 872,
       "origin": "generate:gitignore"
     },
+    ".secretsallow": {
+      "bytes": 2154,
+      "origin": "include:scripts/oss-release/.secretsallow"
+    },
     "AGENTS.md": {
-      "bytes": 5318,
+      "bytes": 5330,
       "origin": "generate:AGENTS.md"
     },
     "CONTRIBUTING.md": {
-      "bytes": 1613,
+      "bytes": 1588,
       "origin": "generate:CONTRIBUTING.md"
     },
     "INSTALL.md": {
-      "bytes": 31747,
+      "bytes": 36687,
       "origin": "generate:INSTALL.md"
     },
     "LICENSE": {
@@ -26,27 +30,27 @@
       "origin": "generate:LICENSE"
     },
     "NOTICE": {
-      "bytes": 2234,
+      "bytes": 1713,
       "origin": "generate:NOTICE"
     },
     "README.md": {
-      "bytes": 5489,
+      "bytes": 6673,
       "origin": "generate:README.md"
     },
     "SECURITY.md": {
-      "bytes": 8003,
+      "bytes": 8854,
       "origin": "generate:SECURITY.md"
     },
     "THIRD_PARTY_LICENSES.md": {
-      "bytes": 3211,
+      "bytes": 2188,
       "origin": "generate:THIRD_PARTY_LICENSES.md"
     },
     "TRADEMARK.md": {
-      "bytes": 1832,
+      "bytes": 1821,
       "origin": "generate:TRADEMARK.md"
     },
     "contracts/gateway-v1.yaml": {
-      "bytes": 56380,
+      "bytes": 61091,
       "origin": "include:contracts/gateway-v1.yaml",
       "scrubbed": true,
       "spdx": "comment"
@@ -64,43 +68,42 @@
       "spdx": "json"
     },
     "contracts/schemas/call_realtime_config.json": {
-      "bytes": 1794,
+      "bytes": 2512,
       "origin": "include:contracts/schemas",
-      "scrubbed": true,
       "spdx": "json"
     },
     "contracts/schemas/error.json": {
-      "bytes": 479,
+      "bytes": 915,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
     },
     "contracts/schemas/gateway_call_lifecycle_event_request.json": {
-      "bytes": 1027,
+      "bytes": 1219,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
     },
     "contracts/schemas/gateway_call_lifecycle_event_response.json": {
-      "bytes": 921,
+      "bytes": 1754,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
     },
     "contracts/schemas/gateway_deployment.json": {
-      "bytes": 4406,
+      "bytes": 4106,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
     },
     "contracts/schemas/gateway_deployment_create_request.json": {
-      "bytes": 2347,
+      "bytes": 2746,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
     },
     "contracts/schemas/gateway_health_report_request.json": {
-      "bytes": 2913,
+      "bytes": 3304,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
@@ -118,13 +121,13 @@
       "spdx": "json"
     },
     "contracts/schemas/number_rules.json": {
-      "bytes": 3992,
+      "bytes": 3984,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
     },
     "contracts/schemas/number_rules_update_request.json": {
-      "bytes": 2842,
+      "bytes": 2838,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
@@ -154,7 +157,7 @@
       "spdx": "json"
     },
     "contracts/schemas/trial_call_route_request.json": {
-      "bytes": 1332,
+      "bytes": 1324,
       "origin": "include:contracts/schemas",
       "scrubbed": true,
       "spdx": "json"
@@ -180,43 +183,170 @@
       "origin": "include:livekit_agent/__init__.py",
       "spdx": "py"
     },
+    "livekit_agent/acknowledgements.py": {
+      "bytes": 38277,
+      "origin": "include:livekit_agent/acknowledgements.py",
+      "spdx": "py"
+    },
+    "livekit_agent/action_inputs.py": {
+      "bytes": 20463,
+      "origin": "include:livekit_agent/action_inputs.py",
+      "spdx": "py"
+    },
+    "livekit_agent/action_listener.py": {
+      "bytes": 7473,
+      "origin": "include:livekit_agent/action_listener.py",
+      "spdx": "py"
+    },
     "livekit_agent/agent/Dockerfile": {
-      "bytes": 1890,
+      "bytes": 13638,
       "origin": "generate:Dockerfile.livekit-agent"
     },
+    "livekit_agent/agent/azure_stt_cleanup_patch.py": {
+      "bytes": 3091,
+      "origin": "include:livekit_agent/agent/azure_stt_cleanup_patch.py",
+      "spdx": "py"
+    },
+    "livekit_agent/agent/browser_startup_output.py": {
+      "bytes": 1063,
+      "origin": "include:livekit_agent/agent/browser_startup_output.py",
+      "spdx": "py"
+    },
     "livekit_agent/agent/carrier-entrypoint.sh": {
-      "bytes": 3782,
+      "bytes": 7343,
       "origin": "include:livekit_agent/agent/carrier-entrypoint.sh",
       "spdx": "comment"
     },
+    "livekit_agent/agent/gemini_opening.py": {
+      "bytes": 3897,
+      "origin": "include:livekit_agent/agent/gemini_opening.py",
+      "spdx": "py"
+    },
+    "livekit_agent/agent/graceful_stop_output.py": {
+      "bytes": 27427,
+      "origin": "include:livekit_agent/agent/graceful_stop_output.py",
+      "spdx": "py"
+    },
+    "livekit_agent/agent/opening_output.py": {
+      "bytes": 1389,
+      "origin": "include:livekit_agent/agent/opening_output.py",
+      "spdx": "py"
+    },
     "livekit_agent/agent/outbound_worker.py": {
-      "bytes": 28747,
+      "bytes": 88230,
       "origin": "include:livekit_agent/agent/outbound_worker.py",
       "spdx": "py"
     },
+    "livekit_agent/agent/playout_hold_output.py": {
+      "bytes": 26183,
+      "origin": "include:livekit_agent/agent/playout_hold_output.py",
+      "spdx": "py"
+    },
     "livekit_agent/agent/production_agent.py": {
-      "bytes": 56769,
+      "bytes": 426832,
       "origin": "include:livekit_agent/agent/production_agent.py",
       "spdx": "py"
     },
     "livekit_agent/agent/provision_selfhost.py": {
-      "bytes": 30276,
+      "bytes": 31513,
       "origin": "generate:provision_selfhost.py",
       "spdx": "py"
     },
     "livekit_agent/agent/reconcile_sessions.py": {
-      "bytes": 6003,
+      "bytes": 16233,
       "origin": "include:livekit_agent/agent/reconcile_sessions.py",
       "spdx": "py"
     },
     "livekit_agent/agent/requirements.txt": {
-      "bytes": 286,
+      "bytes": 1566,
       "origin": "include:livekit_agent/agent/requirements.txt",
       "spdx": "comment"
     },
+    "livekit_agent/agents_readiness.py": {
+      "bytes": 6062,
+      "origin": "include:livekit_agent/agents_readiness.py",
+      "spdx": "py"
+    },
+    "livekit_agent/answer_classifier.py": {
+      "bytes": 58751,
+      "origin": "include:livekit_agent/answer_classifier.py",
+      "spdx": "py"
+    },
+    "livekit_agent/answer_detection.py": {
+      "bytes": 40029,
+      "origin": "include:livekit_agent/answer_detection.py",
+      "spdx": "py"
+    },
+    "livekit_agent/answer_observer.py": {
+      "bytes": 20554,
+      "origin": "include:livekit_agent/answer_observer.py",
+      "spdx": "py"
+    },
+    "livekit_agent/audio-environment/v1/ATTRIBUTION.md": {
+      "bytes": 3038,
+      "origin": "include:livekit_agent/audio-environment/v1/ATTRIBUTION.md"
+    },
+    "livekit_agent/audio-environment/v1/CC0-1.0.txt": {
+      "bytes": 7048,
+      "origin": "include:livekit_agent/audio-environment/v1/CC0-1.0.txt"
+    },
+    "livekit_agent/audio-environment/v1/cafe.wav": {
+      "bytes": 960044,
+      "origin": "include:livekit_agent/audio-environment/v1/cafe.wav"
+    },
+    "livekit_agent/audio-environment/v1/call-centre.wav": {
+      "bytes": 960044,
+      "origin": "include:livekit_agent/audio-environment/v1/call-centre.wav"
+    },
+    "livekit_agent/audio-environment/v1/manifest.json": {
+      "bytes": 23995,
+      "origin": "include:livekit_agent/audio-environment/v1/manifest.json"
+    },
+    "livekit_agent/audio-environment/v1/quiet-office.wav": {
+      "bytes": 960044,
+      "origin": "include:livekit_agent/audio-environment/v1/quiet-office.wav"
+    },
+    "livekit_agent/audio-environment/v1/street.wav": {
+      "bytes": 960044,
+      "origin": "include:livekit_agent/audio-environment/v1/street.wav"
+    },
+    "livekit_agent/audio-environment/v1/television.wav": {
+      "bytes": 960044,
+      "origin": "include:livekit_agent/audio-environment/v1/television.wav"
+    },
+    "livekit_agent/audio_environment.py": {
+      "bytes": 16066,
+      "origin": "include:livekit_agent/audio_environment.py",
+      "spdx": "py"
+    },
+    "livekit_agent/azure_speech.py": {
+      "bytes": 28484,
+      "origin": "include:livekit_agent/azure_speech.py",
+      "spdx": "py"
+    },
+    "livekit_agent/browser_startup.py": {
+      "bytes": 2337,
+      "origin": "include:livekit_agent/browser_startup.py",
+      "spdx": "py"
+    },
+    "livekit_agent/calendar_tools.py": {
+      "bytes": 1591,
+      "origin": "include:livekit_agent/calendar_tools.py",
+      "spdx": "py"
+    },
     "livekit_agent/call_telemetry.py": {
-      "bytes": 17817,
+      "bytes": 39202,
       "origin": "include:livekit_agent/call_telemetry.py",
+      "spdx": "py"
+    },
+    "livekit_agent/call_transcript_events.py": {
+      "bytes": 47253,
+      "origin": "include:livekit_agent/call_transcript_events.py",
+      "spdx": "py"
+    },
+    "livekit_agent/caller_audio_flow.py": {
+      "bytes": 23468,
+      "origin": "include:livekit_agent/caller_audio_flow.py",
       "spdx": "py"
     },
     "livekit_agent/capabilities/__init__.py": {
@@ -224,51 +354,152 @@
       "origin": "include:livekit_agent/capabilities/__init__.py",
       "spdx": "py"
     },
+    "livekit_agent/capabilities/caller_transcript_timing.json": {
+      "bytes": 2124,
+      "origin": "include:livekit_agent/capabilities/caller_transcript_timing.json"
+    },
     "livekit_agent/capabilities/capabilities.json": {
-      "bytes": 5109,
-      "origin": "include:livekit_agent/capabilities/capabilities.json"
+      "bytes": 41793,
+      "origin": "include:livekit_agent/capabilities/capabilities.json",
+      "rewritten": true
+    },
+    "livekit_agent/capabilities/delivery.py": {
+      "bytes": 16543,
+      "origin": "include:livekit_agent/capabilities/delivery.py",
+      "spdx": "py"
+    },
+    "livekit_agent/capabilities/delivery_profiles.json": {
+      "bytes": 6132,
+      "origin": "include:livekit_agent/capabilities/delivery_profiles.json"
+    },
+    "livekit_agent/capabilities/opening.py": {
+      "bytes": 1335,
+      "origin": "include:livekit_agent/capabilities/opening.py",
+      "spdx": "py"
     },
     "livekit_agent/capabilities/registry.py": {
-      "bytes": 37379,
+      "bytes": 108564,
       "origin": "include:livekit_agent/capabilities/registry.py",
+      "rewritten": true,
       "spdx": "py"
     },
     "livekit_agent/capabilities/schema.json": {
-      "bytes": 5463,
-      "origin": "include:livekit_agent/capabilities/schema.json"
+      "bytes": 24352,
+      "origin": "include:livekit_agent/capabilities/schema.json",
+      "rewritten": true
+    },
+    "livekit_agent/capabilities/workflow_listener.py": {
+      "bytes": 14718,
+      "origin": "include:livekit_agent/capabilities/workflow_listener.py",
+      "spdx": "py"
+    },
+    "livekit_agent/capabilities/workflow_source_fields.py": {
+      "bytes": 2222,
+      "origin": "include:livekit_agent/capabilities/workflow_source_fields.py",
+      "spdx": "py"
+    },
+    "livekit_agent/capabilities/workflow_sources.py": {
+      "bytes": 32213,
+      "origin": "include:livekit_agent/capabilities/workflow_sources.py",
+      "spdx": "py"
+    },
+    "livekit_agent/cartesia_tts.py": {
+      "bytes": 13908,
+      "origin": "include:livekit_agent/cartesia_tts.py",
+      "spdx": "py"
+    },
+    "livekit_agent/check_in.py": {
+      "bytes": 3436,
+      "origin": "include:livekit_agent/check_in.py",
+      "spdx": "py"
+    },
+    "livekit_agent/closing_classifier.py": {
+      "bytes": 12295,
+      "origin": "include:livekit_agent/closing_classifier.py",
+      "spdx": "py"
+    },
+    "livekit_agent/closing_evidence.py": {
+      "bytes": 5661,
+      "origin": "include:livekit_agent/closing_evidence.py",
+      "spdx": "py"
     },
     "livekit_agent/component_billing.py": {
-      "bytes": 19892,
+      "bytes": 48177,
       "origin": "include:livekit_agent/component_billing.py",
       "spdx": "py"
     },
     "livekit_agent/component_credentials.py": {
-      "bytes": 7498,
+      "bytes": 11843,
       "origin": "include:livekit_agent/component_credentials.py",
       "spdx": "py"
     },
     "livekit_agent/control_plane.py": {
-      "bytes": 72018,
+      "bytes": 156325,
       "origin": "include:livekit_agent/control_plane.py",
       "spdx": "py"
     },
+    "livekit_agent/conversation_engines_generated.py": {
+      "bytes": 3803,
+      "origin": "include:livekit_agent/conversation_engines_generated.py",
+      "spdx": "py"
+    },
     "livekit_agent/demo.py": {
-      "bytes": 34043,
+      "bytes": 95303,
       "origin": "include:livekit_agent/demo.py",
       "spdx": "py"
     },
+    "livekit_agent/duplex_liveness.py": {
+      "bytes": 29337,
+      "origin": "include:livekit_agent/duplex_liveness.py",
+      "spdx": "py"
+    },
+    "livekit_agent/duplex_opening_hold.py": {
+      "bytes": 43896,
+      "origin": "include:livekit_agent/duplex_opening_hold.py",
+      "spdx": "py"
+    },
+    "livekit_agent/elevenlabs_tts.py": {
+      "bytes": 14107,
+      "origin": "include:livekit_agent/elevenlabs_tts.py",
+      "spdx": "py"
+    },
+    "livekit_agent/end_call_guard.py": {
+      "bytes": 88243,
+      "origin": "include:livekit_agent/end_call_guard.py",
+      "spdx": "py"
+    },
+    "livekit_agent/error_tracking.py": {
+      "bytes": 57675,
+      "origin": "include:livekit_agent/error_tracking.py",
+      "spdx": "py"
+    },
     "livekit_agent/evidence_contract.py": {
-      "bytes": 3173,
+      "bytes": 12541,
       "origin": "include:livekit_agent/evidence_contract.py",
       "spdx": "py"
     },
+    "livekit_agent/evidence_sidecar.py": {
+      "bytes": 10119,
+      "origin": "include:livekit_agent/evidence_sidecar.py",
+      "spdx": "py"
+    },
+    "livekit_agent/first_clause.py": {
+      "bytes": 9077,
+      "origin": "include:livekit_agent/first_clause.py",
+      "spdx": "py"
+    },
     "livekit_agent/fish_audio_tts.py": {
-      "bytes": 7333,
+      "bytes": 9464,
       "origin": "include:livekit_agent/fish_audio_tts.py",
       "spdx": "py"
     },
+    "livekit_agent/funded_runtime.py": {
+      "bytes": 5275,
+      "origin": "include:livekit_agent/funded_runtime.py",
+      "spdx": "py"
+    },
     "livekit_agent/gemini_tts.py": {
-      "bytes": 9047,
+      "bytes": 31331,
       "origin": "include:livekit_agent/gemini_tts.py",
       "spdx": "py"
     },
@@ -277,48 +508,458 @@
       "origin": "include:livekit_agent/gemini_tts_usage.py",
       "spdx": "py"
     },
+    "livekit_agent/google_stt.py": {
+      "bytes": 4418,
+      "origin": "include:livekit_agent/google_stt.py",
+      "spdx": "py"
+    },
+    "livekit_agent/gpt_live_runtime.py": {
+      "bytes": 33469,
+      "origin": "include:livekit_agent/gpt_live_runtime.py",
+      "spdx": "py"
+    },
+    "livekit_agent/graceful_stop.py": {
+      "bytes": 26720,
+      "origin": "include:livekit_agent/graceful_stop.py",
+      "spdx": "py"
+    },
+    "livekit_agent/interruption_boundary.py": {
+      "bytes": 12828,
+      "origin": "include:livekit_agent/interruption_boundary.py",
+      "spdx": "py"
+    },
+    "livekit_agent/leading_silence.py": {
+      "bytes": 7231,
+      "origin": "include:livekit_agent/leading_silence.py",
+      "spdx": "py"
+    },
+    "livekit_agent/live_opening.py": {
+      "bytes": 25321,
+      "origin": "include:livekit_agent/live_opening.py",
+      "spdx": "py"
+    },
+    "livekit_agent/live_reply_recovery.py": {
+      "bytes": 19210,
+      "origin": "include:livekit_agent/live_reply_recovery.py",
+      "spdx": "py"
+    },
     "livekit_agent/livekit_evidence.py": {
-      "bytes": 20779,
+      "bytes": 172746,
       "origin": "include:livekit_agent/livekit_evidence.py",
       "spdx": "py"
     },
+    "livekit_agent/model_unresponsive.py": {
+      "bytes": 56865,
+      "origin": "include:livekit_agent/model_unresponsive.py",
+      "spdx": "py"
+    },
+    "livekit_agent/mutual_silence.py": {
+      "bytes": 30674,
+      "origin": "include:livekit_agent/mutual_silence.py",
+      "spdx": "py"
+    },
+    "livekit_agent/native_caller_floor.py": {
+      "bytes": 3447,
+      "origin": "include:livekit_agent/native_caller_floor.py",
+      "spdx": "py"
+    },
     "livekit_agent/native_tts_usage.py": {
-      "bytes": 3481,
+      "bytes": 31936,
       "origin": "include:livekit_agent/native_tts_usage.py",
       "spdx": "py"
     },
+    "livekit_agent/navigation_entry.py": {
+      "bytes": 12383,
+      "origin": "generate:navigation_entry.py",
+      "spdx": "py"
+    },
+    "livekit_agent/opening_turn.py": {
+      "bytes": 41023,
+      "origin": "include:livekit_agent/opening_turn.py",
+      "spdx": "py"
+    },
+    "livekit_agent/phone_admission.py": {
+      "bytes": 39452,
+      "origin": "include:livekit_agent/phone_admission.py",
+      "spdx": "py"
+    },
+    "livekit_agent/playout_hold.py": {
+      "bytes": 23424,
+      "origin": "include:livekit_agent/playout_hold.py",
+      "spdx": "py"
+    },
+    "livekit_agent/post_answer_arbiter.py": {
+      "bytes": 58786,
+      "origin": "include:livekit_agent/post_answer_arbiter.py",
+      "spdx": "py"
+    },
     "livekit_agent/prewarm.py": {
-      "bytes": 2370,
+      "bytes": 38626,
       "origin": "include:livekit_agent/prewarm.py",
       "spdx": "py"
     },
     "livekit_agent/production.py": {
-      "bytes": 48479,
+      "bytes": 551452,
       "origin": "include:livekit_agent/production.py",
       "spdx": "py"
     },
+    "livekit_agent/realtime_event_trace.py": {
+      "bytes": 5017,
+      "origin": "include:livekit_agent/realtime_event_trace.py",
+      "spdx": "py"
+    },
+    "livekit_agent/realtime_session_clock.py": {
+      "bytes": 7461,
+      "origin": "include:livekit_agent/realtime_session_clock.py",
+      "spdx": "py"
+    },
     "livekit_agent/reconciliation.py": {
-      "bytes": 4856,
+      "bytes": 39086,
       "origin": "include:livekit_agent/reconciliation.py",
       "spdx": "py"
     },
+    "livekit_agent/runtime_language_switch.py": {
+      "bytes": 81955,
+      "origin": "include:livekit_agent/runtime_language_switch.py",
+      "spdx": "py"
+    },
+    "livekit_agent/session_state_file.py": {
+      "bytes": 9622,
+      "origin": "include:livekit_agent/session_state_file.py",
+      "spdx": "py"
+    },
+    "livekit_agent/sip_answer_gate.py": {
+      "bytes": 10033,
+      "origin": "include:livekit_agent/sip_answer_gate.py",
+      "spdx": "py"
+    },
+    "livekit_agent/sip_call_statistics.py": {
+      "bytes": 10360,
+      "origin": "include:livekit_agent/sip_call_statistics.py",
+      "spdx": "py"
+    },
+    "livekit_agent/soniox_stt.py": {
+      "bytes": 7805,
+      "origin": "include:livekit_agent/soniox_stt.py",
+      "spdx": "py"
+    },
     "livekit_agent/soniox_tts.py": {
-      "bytes": 10895,
+      "bytes": 11318,
       "origin": "include:livekit_agent/soniox_tts.py",
       "spdx": "py"
     },
     "livekit_agent/soniox_usage.py": {
-      "bytes": 22851,
+      "bytes": 35318,
       "origin": "include:livekit_agent/soniox_usage.py",
       "spdx": "py"
     },
+    "livekit_agent/source_keys.py": {
+      "bytes": 3454,
+      "origin": "include:livekit_agent/source_keys.py",
+      "spdx": "py"
+    },
+    "livekit_agent/spoken_language.py": {
+      "bytes": 16634,
+      "origin": "include:livekit_agent/spoken_language.py",
+      "spdx": "py"
+    },
+    "livekit_agent/tool_declarations.py": {
+      "bytes": 15992,
+      "origin": "include:livekit_agent/tool_declarations.py",
+      "spdx": "py"
+    },
+    "livekit_agent/tool_wait.py": {
+      "bytes": 31193,
+      "origin": "include:livekit_agent/tool_wait.py",
+      "spdx": "py"
+    },
+    "livekit_agent/transcript_coverage.py": {
+      "bytes": 6866,
+      "origin": "include:livekit_agent/transcript_coverage.py",
+      "spdx": "py"
+    },
+    "livekit_agent/transcript_events.py": {
+      "bytes": 15526,
+      "origin": "include:livekit_agent/transcript_events.py",
+      "spdx": "py"
+    },
+    "livekit_agent/transcription_stall.py": {
+      "bytes": 18018,
+      "origin": "include:livekit_agent/transcription_stall.py",
+      "spdx": "py"
+    },
+    "livekit_agent/transfer.py": {
+      "bytes": 27372,
+      "origin": "include:livekit_agent/transfer.py",
+      "spdx": "py"
+    },
+    "livekit_agent/transfer_dial.py": {
+      "bytes": 5392,
+      "origin": "include:livekit_agent/transfer_dial.py",
+      "spdx": "py"
+    },
+    "livekit_agent/turn_end_evidence.py": {
+      "bytes": 16423,
+      "origin": "include:livekit_agent/turn_end_evidence.py",
+      "spdx": "py"
+    },
+    "livekit_agent/unrecognised_speech.py": {
+      "bytes": 27184,
+      "origin": "include:livekit_agent/unrecognised_speech.py",
+      "spdx": "py"
+    },
+    "livekit_agent/usage_report_outbox.py": {
+      "bytes": 12370,
+      "origin": "include:livekit_agent/usage_report_outbox.py",
+      "spdx": "py"
+    },
+    "livekit_agent/voice_configuration.py": {
+      "bytes": 1757,
+      "origin": "include:livekit_agent/voice_configuration.py",
+      "spdx": "py"
+    },
+    "livekit_agent/voicemail_signals.py": {
+      "bytes": 38775,
+      "origin": "include:livekit_agent/voicemail_signals.py",
+      "spdx": "py"
+    },
+    "livekit_agent/voicemail_watch.py": {
+      "bytes": 47849,
+      "origin": "include:livekit_agent/voicemail_watch.py",
+      "spdx": "py"
+    },
+    "livekit_agent/worker_drain.py": {
+      "bytes": 3756,
+      "origin": "include:livekit_agent/worker_drain.py",
+      "spdx": "py"
+    },
+    "livekit_agent/worker_events.py": {
+      "bytes": 37347,
+      "origin": "include:livekit_agent/worker_events.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_authored_tts.py": {
+      "bytes": 4791,
+      "origin": "include:livekit_agent/workflow_authored_tts.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_authored_wire.py": {
+      "bytes": 8747,
+      "origin": "include:livekit_agent/workflow_authored_wire.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_azure_authored.py": {
+      "bytes": 3463,
+      "origin": "include:livekit_agent/workflow_azure_authored.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_azure_listener.py": {
+      "bytes": 19199,
+      "origin": "include:livekit_agent/workflow_azure_listener.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_azure_listener_worker.py": {
+      "bytes": 19485,
+      "origin": "include:livekit_agent/workflow_azure_listener_worker.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_call.py": {
+      "bytes": 46266,
+      "origin": "include:livekit_agent/workflow_call.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_deepgram_listener.py": {
+      "bytes": 24929,
+      "origin": "include:livekit_agent/workflow_deepgram_listener.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_delivery_transport.py": {
+      "bytes": 19444,
+      "origin": "include:livekit_agent/workflow_delivery_transport.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_detector.py": {
+      "bytes": 925,
+      "origin": "include:livekit_agent/workflow_detector.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_elevenlabs_authored.py": {
+      "bytes": 2428,
+      "origin": "include:livekit_agent/workflow_elevenlabs_authored.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_fishaudio_authored.py": {
+      "bytes": 2070,
+      "origin": "include:livekit_agent/workflow_fishaudio_authored.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_gemini_authored.py": {
+      "bytes": 14777,
+      "origin": "include:livekit_agent/workflow_gemini_authored.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_gemini_authored_worker.py": {
+      "bytes": 10670,
+      "origin": "include:livekit_agent/workflow_gemini_authored_worker.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_input.py": {
+      "bytes": 16437,
+      "origin": "include:livekit_agent/workflow_input.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_input_capture.py": {
+      "bytes": 30361,
+      "origin": "include:livekit_agent/workflow_input_capture.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_input_recognition.py": {
+      "bytes": 3349,
+      "origin": "include:livekit_agent/workflow_input_recognition.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_input_ring.py": {
+      "bytes": 12527,
+      "origin": "include:livekit_agent/workflow_input_ring.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_lifecycle_ack.py": {
+      "bytes": 3225,
+      "origin": "include:livekit_agent/workflow_lifecycle_ack.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_listener_runtime.py": {
+      "bytes": 8262,
+      "origin": "include:livekit_agent/workflow_listener_runtime.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_listener_source.py": {
+      "bytes": 5459,
+      "origin": "include:livekit_agent/workflow_listener_source.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_live_output.py": {
+      "bytes": 55049,
+      "origin": "include:livekit_agent/workflow_live_output.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_openai_transcribe_listener.py": {
+      "bytes": 25181,
+      "origin": "include:livekit_agent/workflow_openai_transcribe_listener.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_pickup.py": {
+      "bytes": 7522,
+      "origin": "include:livekit_agent/workflow_pickup.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_playback.py": {
+      "bytes": 7764,
+      "origin": "include:livekit_agent/workflow_playback.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_playback_selftest.py": {
+      "bytes": 9547,
+      "origin": "include:livekit_agent/agent/workflow_playback_selftest.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_plugin_authored.py": {
+      "bytes": 16894,
+      "origin": "include:livekit_agent/workflow_plugin_authored.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_reply_output.py": {
+      "bytes": 46581,
+      "origin": "include:livekit_agent/workflow_reply_output.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_requests.py": {
+      "bytes": 8169,
+      "origin": "include:livekit_agent/workflow_requests.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_room_input.py": {
+      "bytes": 7393,
+      "origin": "include:livekit_agent/workflow_room_input.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_root.py": {
+      "bytes": 91537,
+      "origin": "include:livekit_agent/workflow_root.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_root_evidence.py": {
+      "bytes": 23653,
+      "origin": "include:livekit_agent/workflow_root_evidence.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_root_language.py": {
+      "bytes": 6768,
+      "origin": "include:livekit_agent/workflow_root_language.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_root_plan.py": {
+      "bytes": 16158,
+      "origin": "include:livekit_agent/workflow_root_plan.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_segment_delivery.py": {
+      "bytes": 11382,
+      "origin": "include:livekit_agent/workflow_segment_delivery.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_soniox_authored.py": {
+      "bytes": 2807,
+      "origin": "include:livekit_agent/workflow_soniox_authored.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_soniox_listener.py": {
+      "bytes": 18850,
+      "origin": "include:livekit_agent/workflow_soniox_listener.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_source_meter.py": {
+      "bytes": 5929,
+      "origin": "include:livekit_agent/workflow_source_meter.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_source_owner.py": {
+      "bytes": 17026,
+      "origin": "include:livekit_agent/workflow_source_owner.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_source_transport.py": {
+      "bytes": 15335,
+      "origin": "include:livekit_agent/workflow_source_transport.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_speech.py": {
+      "bytes": 10681,
+      "origin": "include:livekit_agent/workflow_speech.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_speech_preparation.py": {
+      "bytes": 735,
+      "origin": "include:livekit_agent/workflow_speech_preparation.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_speech_segments.py": {
+      "bytes": 2057,
+      "origin": "include:livekit_agent/workflow_speech_segments.py",
+      "spdx": "py"
+    },
+    "livekit_agent/workflow_tasks.py": {
+      "bytes": 598,
+      "origin": "include:livekit_agent/workflow_tasks.py",
+      "spdx": "py"
+    },
     "livekit_agent/workflow_turns.py": {
-      "bytes": 13462,
+      "bytes": 2244,
       "origin": "include:livekit_agent/workflow_turns.py",
       "spdx": "py"
     },
     "llms-full.txt": {
-      "bytes": 45296,
+      "bytes": 52155,
       "origin": "generate:concat",
       "sources": [
         "README.md",
@@ -327,308 +968,167 @@
       ]
     },
     "llms.txt": {
-      "bytes": 7906,
+      "bytes": 8641,
       "origin": "generate:llms.txt"
     },
-    "packages/openphonex-common/LICENSE": {
+    "packages/skysay-common/LICENSE": {
       "bytes": 11357,
-      "origin": "include:packages/openphonex-common"
+      "origin": "include:packages/skysay-common"
     },
-    "packages/openphonex-common/README.md": {
-      "bytes": 591,
-      "origin": "include:packages/openphonex-common"
+    "packages/skysay-common/README.md": {
+      "bytes": 575,
+      "origin": "include:packages/skysay-common"
     },
-    "packages/openphonex-common/openphonex_common/__init__.py": {
-      "bytes": 207,
-      "origin": "include:packages/openphonex-common",
+    "packages/skysay-common/pyproject.toml": {
+      "bytes": 379,
+      "origin": "include:packages/skysay-common"
+    },
+    "packages/skysay-common/skysay_common/__init__.py": {
+      "bytes": 203,
+      "origin": "include:packages/skysay-common",
       "spdx": "py"
     },
-    "packages/openphonex-common/openphonex_common/config.py": {
-      "bytes": 1911,
-      "origin": "include:packages/openphonex-common",
+    "packages/skysay-common/skysay_common/calendar_tools.py": {
+      "bytes": 1591,
+      "origin": "include:packages/skysay-common",
       "spdx": "py"
     },
-    "packages/openphonex-common/openphonex_common/runtime.py": {
-      "bytes": 3967,
-      "origin": "include:packages/openphonex-common",
+    "packages/skysay-common/skysay_common/config.py": {
+      "bytes": 1891,
+      "origin": "include:packages/skysay-common",
       "spdx": "py"
     },
-    "packages/openphonex-common/pyproject.toml": {
-      "bytes": 391,
-      "origin": "include:packages/openphonex-common"
+    "packages/skysay-common/skysay_common/runtime.py": {
+      "bytes": 3988,
+      "origin": "include:packages/skysay-common",
+      "spdx": "py"
     },
-    "packages/openphonex-gateway/LICENSE": {
+    "packages/skysay-common/skysay_common/tool_declarations.py": {
+      "bytes": 15992,
+      "origin": "include:packages/skysay-common",
+      "spdx": "py"
+    },
+    "packages/skysay-gateway/LICENSE": {
       "bytes": 11357,
-      "origin": "include:packages/openphonex-gateway"
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/README.md": {
-      "bytes": 1320,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/README.md": {
+      "bytes": 1654,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/.env.livekit.example": {
-      "bytes": 15312,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/.env.livekit.example": {
+      "bytes": 18629,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/.env.registrar.example": {
-      "bytes": 6178,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/.env.registrar.example": {
+      "bytes": 6524,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/SELFHOST.md": {
-      "bytes": 59030,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/SELFHOST.md": {
+      "bytes": 69529,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/docker-compose.livekit.yml": {
-      "bytes": 11923,
-      "origin": "include:packages/openphonex-gateway",
+    "packages/skysay-gateway/deploy/docker-compose.livekit.yml": {
+      "bytes": 13910,
+      "origin": "include:packages/skysay-gateway",
       "rewritten": true
     },
-    "packages/openphonex-gateway/deploy/livekit.yaml.example": {
-      "bytes": 945,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/livekit.yaml.example": {
+      "bytes": 908,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/registrar/Dockerfile": {
-      "bytes": 2535,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/registrar/Dockerfile": {
+      "bytes": 2507,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/registrar/entrypoint.sh": {
-      "bytes": 19240,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/registrar/entrypoint.sh": {
+      "bytes": 19232,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/registrar/healthcheck.sh": {
-      "bytes": 1720,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/registrar/healthcheck.sh": {
+      "bytes": 1716,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/registrar/kamailio.cfg": {
-      "bytes": 10647,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/registrar/kamailio.cfg": {
+      "bytes": 10627,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/selfhost-bootstrap.sh": {
-      "bytes": 56849,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/selfhost-bootstrap.sh": {
+      "bytes": 56797,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/selfhost-smoketest.sh": {
-      "bytes": 56377,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/selfhost-smoketest.sh": {
+      "bytes": 55447,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/deploy/sip.yaml.example": {
-      "bytes": 705,
-      "origin": "include:packages/openphonex-gateway"
+    "packages/skysay-gateway/deploy/sip.yaml.example": {
+      "bytes": 668,
+      "origin": "include:packages/skysay-gateway"
     },
-    "packages/openphonex-gateway/openphonex_gateway/__init__.py": {
-      "bytes": 648,
-      "origin": "include:packages/openphonex-gateway",
+    "packages/skysay-gateway/pyproject.toml": {
+      "bytes": 509,
+      "origin": "include:packages/skysay-gateway"
+    },
+    "packages/skysay-gateway/skysay_gateway/__init__.py": {
+      "bytes": 373,
+      "origin": "include:packages/skysay-gateway",
       "spdx": "py"
     },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/__init__.py": {
-      "bytes": 1460,
-      "origin": "include:packages/openphonex-gateway",
+    "packages/skysay-gateway/skysay_gateway/evidence/__init__.py": {
+      "bytes": 317,
+      "origin": "include:packages/skysay-gateway",
       "spdx": "py"
     },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/adapters.py": {
-      "bytes": 4632,
-      "origin": "include:packages/openphonex-gateway",
+    "packages/skysay-gateway/skysay_gateway/evidence/semantic_audio_policy.py": {
+      "bytes": 1684,
+      "origin": "include:packages/skysay-gateway",
       "spdx": "py"
     },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/anthropic_streaming.py": {
-      "bytes": 8383,
-      "origin": "include:packages/openphonex-gateway",
+    "packages/skysay-gateway/skysay_gateway/evidence/voice_evidence.py": {
+      "bytes": 57943,
+      "origin": "include:packages/skysay-gateway",
       "spdx": "py"
     },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/audio_encode.py": {
-      "bytes": 3198,
-      "origin": "include:packages/openphonex-gateway",
+    "packages/skysay-gateway/skysay_gateway/evidence/voice_evidence_cli.py": {
+      "bytes": 22219,
+      "origin": "include:packages/skysay-gateway",
       "spdx": "py"
     },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/barge_in.py": {
-      "bytes": 2517,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/cartesia_tts.py": {
-      "bytes": 4427,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/deepgram_aura_tts.py": {
-      "bytes": 3786,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/deepgram_streaming_stt.py": {
-      "bytes": 9891,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/elevenlabs_scribe_stt.py": {
-      "bytes": 3868,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/elevenlabs_v3_streaming.py": {
-      "bytes": 7228,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/faster_whisper_stt.py": {
-      "bytes": 3731,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/frames.py": {
-      "bytes": 2341,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/gemini_streaming.py": {
-      "bytes": 15323,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/google_stt.py": {
-      "bytes": 11182,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/local_tts.py": {
-      "bytes": 5697,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/metrics.py": {
-      "bytes": 8458,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/openai_chat.py": {
-      "bytes": 2031,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/openai_compatible_llm.py": {
-      "bytes": 3991,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/openai_streaming.py": {
-      "bytes": 9194,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/pipeline.py": {
-      "bytes": 55343,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/provider_http.py": {
-      "bytes": 1990,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/recorder.py": {
-      "bytes": 6216,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/registry.py": {
-      "bytes": 10664,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/resample.py": {
-      "bytes": 2544,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/semantic_audio_policy.py": {
-      "bytes": 1190,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/semantic_endpointing.py": {
-      "bytes": 1489,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/stt.py": {
-      "bytes": 2301,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/tools.py": {
-      "bytes": 7588,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/transport.py": {
-      "bytes": 25161,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/tts.py": {
-      "bytes": 2527,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/turn_detection.py": {
-      "bytes": 3344,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/voice_evidence.py": {
-      "bytes": 57868,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/realtime/voice_evidence_cli.py": {
-      "bytes": 22175,
-      "origin": "include:packages/openphonex-gateway",
-      "spdx": "py"
-    },
-    "packages/openphonex-gateway/openphonex_gateway/rtp.py": {
+    "packages/skysay-gateway/skysay_gateway/rtp.py": {
       "bytes": 1798,
-      "origin": "include:packages/openphonex-gateway",
+      "origin": "include:packages/skysay-gateway",
       "spdx": "py"
-    },
-    "packages/openphonex-gateway/pyproject.toml": {
-      "bytes": 2065,
-      "origin": "include:packages/openphonex-gateway"
     },
     "tests/test_livekit_outbound_worker.py": {
-      "bytes": 23859,
+      "bytes": 37980,
       "origin": "include:tests/test_livekit_outbound_worker.py",
       "rewritten": true
     },
-    "tests/test_realtime_media_pipeline.py": {
-      "bytes": 81123,
-      "origin": "include:tests/test_realtime_media_pipeline.py",
-      "rewritten": true
-    },
-    "tests/test_realtime_transport.py": {
-      "bytes": 32260,
-      "origin": "include:tests/test_realtime_transport.py",
-      "rewritten": true
-    },
     "tests/test_runtime.py": {
-      "bytes": 917,
+      "bytes": 897,
       "origin": "include:tests/test_runtime.py",
       "rewritten": true
     },
     "tests/test_sch172_livekit_control_plane.py": {
-      "bytes": 49630,
+      "bytes": 72975,
       "origin": "include:tests/test_sch172_livekit_control_plane.py",
       "rewritten": true
     },
     "tests/test_sch236_livekit_production.py": {
-      "bytes": 87422,
+      "bytes": 127383,
       "origin": "include:tests/test_sch236_livekit_production.py",
       "rewritten": true
     },
     "tests/test_sch243_prewarming.py": {
-      "bytes": 3290,
+      "bytes": 8723,
       "origin": "include:tests/test_sch243_prewarming.py",
       "rewritten": true
+    },
+    "tests/test_voice_evidence.py": {
+      "bytes": 122394,
+      "origin": "include:tests/test_voice_evidence.py"
     }
   },
-  "public_repo_name": "openphonex-gateway",
-  "total_bytes": 1567426
+  "public_repo_name": "skysay-gateway",
+  "total_bytes": 10154654
 }

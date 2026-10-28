@@ -1,7 +1,7 @@
 {
   "$comment": "SPDX-License-Identifier: Apache-2.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://openphonex.com/contracts/gateway-v1/call_realtime_config.json",
+  "$id": "https://skysay.ai/contracts/gateway-v1/call_realtime_config.json",
   "title": "CallRealtimeConfig",
   "type": "object",
   "required": [
@@ -17,7 +17,8 @@
     "recording_enabled",
     "transcriber",
     "model",
-    "voice"
+    "voice",
+    "answer_detection"
   ],
   "properties": {
     "call_id": {
@@ -93,6 +94,31 @@
     },
     "voice_polish": {
       "type": "object"
+    },
+    "answer_detection": {
+      "type": "object",
+      "required": [
+        "non_human_audio",
+        "voicemail"
+      ],
+      "properties": {
+        "non_human_audio": {
+          "type": "string",
+          "minLength": 1
+        },
+        "voicemail": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "content_storage": {
+      "type": "string",
+      "enum": [
+        "skysay",
+        "gateway"
+      ],
+      "description": "Where this deployment keeps call content. 'gateway' (content-local): keep recordings, transcripts and evidence on the gateway and send Skysay no call content. A self-hosted worker refuses a config without this field."
     }
   },
   "additionalProperties": false

@@ -28,6 +28,46 @@
     "call": {
       "type": "object"
     },
+    "funded_runtime": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "authorized_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "answered_at": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "current",
+            "renewed",
+            "still_short",
+            "pending",
+            "expired"
+          ]
+        },
+        "renew_before_seconds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "generation",
+        "authorized_seconds",
+        "answered_at",
+        "outcome",
+        "renew_before_seconds"
+      ],
+      "additionalProperties": false
+    },
     "billing": {
       "type": [
         "object",

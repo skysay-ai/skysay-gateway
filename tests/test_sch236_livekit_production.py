@@ -13,6 +13,8 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from livekit_agent.production import (
+    require_pre_media_participant,
+    require_inbound_sip_answer,
     PreMediaTermination,
     ProductionConfigurationError,
     SemanticTurnAdmission,
@@ -22,13 +24,22 @@ from livekit_agent.production import (
     executed_tool_names,
     is_greeting_fragment,
     post_livekit_worker_heartbeat,
+    pre_media_lifecycle_reason,
     PeriodicWorkerHeartbeat,
     browser_test_close_component,
     browser_test_error_metadata,
     component_model_labels,
+    MANAGED_PSTN_INTERRUPTION_MIN_DURATION_SECONDS,
+    admitted_tts_text,
+    await_bounded_teardown_task,
+    await_bounded_production_session_close,
+    close_production_session_after_room_end,
     profile_from_realtime_config,
+    production_room_disconnect_handler,
     safe_component_error_diagnostics,
+    session_options_with_managed_pstn_turn_taking,
     service_heartbeat_environ,
+    shutdown_evidence_sidecar,
     terminate_pre_media_call,
     worker_heartbeat_metadata,
     worker_heartbeats_enabled,
@@ -41,10 +52,11 @@ from livekit_agent.control_plane import (
 from livekit_agent.component_billing import SuccessfulToolUsageCounter
 from livekit_agent.evidence_contract import (
     effective_voice_stack_identity,
+    is_noncaller_ambience_track,
     semantic_response_audio_policy as livekit_semantic_response_audio_policy,
     valid_effective_voice_stack_identity,
 )
-from openphonex_gateway.realtime.semantic_audio_policy import (
+from skysay_gateway.evidence.semantic_audio_policy import (
     semantic_response_audio_policy as referee_semantic_response_audio_policy,
 )
 from livekit_agent.reconciliation import reconcile_stale_sessions
@@ -75,6 +87,52 @@ def _config(*, language: str = "et", tools: list[str] | None = None) -> dict:
     }
 
 
+class PreMediaParticipantPresenceTests(unittest.TestCase):
+
+    def test_departed_and_replaced_leg_are_refused_but_same_sid_is_live(self):
+        participant = SimpleNamespace(identity="caller", sid="PA_original")
+        room = SimpleNamespace(remote_participants={})
+        for current in (None, SimpleNamespace(identity="caller", sid="PA_reconnected")):
+            room.remote_participants = {} if current is None else {"caller": current}
+            with self.assertRaises(ProductionConfigurationError) as raised:
+                require_pre_media_participant(room, participant)
+            self.assertEqual(raised.exception.reason, "caller_left_before_media")
+        room.remote_participants = {"caller": SimpleNamespace(identity="caller", sid="PA_original")}
+        require_pre_media_participant(room, participant)
+
+
+    def test_inbound_answer_requires_live_exact_leg_and_active_status(self):
+        async def exercise():
+            for outcome in ("active", "departed", "replaced", "timeout", "missing", "cancelled"):
+                with self.subTest(outcome=outcome):
+                    leg = SimpleNamespace(identity="caller", sid="PA_original", attributes={"sip.callStatus": "ringing"})
+                    room = SimpleNamespace(remote_participants={"caller": leg})
+                    async def wait():
+                        if outcome == "active":
+                            leg.attributes["sip.callStatus"] = "active"
+                        elif outcome == "departed":
+                            room.remote_participants.clear()
+                            raise RuntimeError("participant disconnected")
+                        elif outcome == "replaced":
+                            room.remote_participants["caller"] = SimpleNamespace(sid="PA_new", attributes={"sip.callStatus": "active"})
+                        elif outcome == "timeout":
+                            raise TimeoutError()
+                        elif outcome == "cancelled":
+                            raise asyncio.CancelledError()
+                        else:
+                            leg.attributes.clear()
+                    if outcome == "active":
+                        await require_inbound_sip_answer(room, leg, wait_for_active=wait, timeout_seconds=1)
+                    elif outcome == "cancelled":
+                        with self.assertRaises(asyncio.CancelledError):
+                            await require_inbound_sip_answer(room, leg, wait_for_active=wait, timeout_seconds=1)
+                    else:
+                        with self.assertRaises(ProductionConfigurationError) as raised:
+                            await require_inbound_sip_answer(room, leg, wait_for_active=wait, timeout_seconds=1)
+                        self.assertEqual(raised.exception.reason, "caller_left_before_media" if outcome in {"departed", "replaced"} else "inbound_answer_unconfirmed")
+        asyncio.run(exercise())
+
+
 class _Session:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
@@ -98,7 +156,13 @@ class _Session:
 
     def invoke_tool(self, name: str, arguments: dict) -> dict:
         self.calls.append((name, arguments))
-        return {"result": {"content": [{"json": {"calls": []}}]}}
+        return {
+            "result": {
+                "content": [{"type": "text", "text": '{"calls": []}'}],
+                "structuredContent": {"calls": []},
+                "isError": False,
+            }
+        }
 
 
 class _Tool:
@@ -135,7 +199,7 @@ class _EndCallAgentSession:
         self.say_calls: list[tuple[str, bool]] = []
         self.shutdown_calls: list[bool] = []
 
-    def say(self, message: str, *, allow_interruptions: bool):
+    def say(self, message: str, *, allow_interruptions: bool, add_to_chat_ctx: bool = True):
         self.events.append("say")
         self.say_calls.append((message, allow_interruptions))
         return self.speech
@@ -257,6 +321,561 @@ def _mentions(node: ast.AST, name: str) -> bool:
 
 
 class SCH236LiveKitProductionTests(unittest.TestCase):
+    def test_room_disconnect_session_close_is_bounded_even_when_close_ignores_cancellation(self) -> None:
+        async def scenario() -> None:
+            release = asyncio.Event()
+            late_results: list[str] = []
+            late_seen = asyncio.Event()
+
+            def note_late_result(error_type: str) -> None:
+                late_results.append(error_type)
+                late_seen.set()
+
+            class Session:
+                async def aclose(self) -> None:
+                    try:
+                        await asyncio.Event().wait()
+                    except asyncio.CancelledError:
+                        await release.wait()
+
+            result = await asyncio.wait_for(
+                await_bounded_production_session_close(
+                    Session(),
+                    timeout_seconds=0.01,
+                    cancellation_grace_seconds=0.01,
+                    on_late_completion=note_late_result,
+                ),
+                timeout=1.0,
+            )
+            self.assertFalse(result.completed)
+            self.assertTrue(result.cancellation_resistant)
+            self.assertEqual(result.error_type, "TimeoutError")
+            release.set()
+            await asyncio.wait_for(late_seen.wait(), timeout=1.0)
+            self.assertEqual(late_results, [""])
+
+        asyncio.run(scenario())
+
+    def test_detached_browser_report_preserves_late_failure_type(self) -> None:
+        async def scenario() -> None:
+            release = asyncio.Event()
+            late_seen = asyncio.Event()
+            late_results: list[str] = []
+
+            async def resistant_report() -> None:
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+                    raise RuntimeError("late provider failure")
+
+            report = asyncio.create_task(resistant_report())
+            result = await await_bounded_teardown_task(
+                report,
+                timeout_seconds=0.01,
+                cancellation_grace_seconds=0.01,
+                on_late_completion=lambda error_type: (
+                    late_results.append(error_type),
+                    late_seen.set(),
+                ),
+            )
+            self.assertTrue(result.cancellation_resistant)
+            release.set()
+            await asyncio.wait_for(late_seen.wait(), timeout=1.0)
+            self.assertEqual(late_results, ["RuntimeError"])
+
+        asyncio.run(scenario())
+
+    def test_sidecar_and_capture_tasks_cannot_hold_terminal_settlement(self) -> None:
+        async def scenario() -> None:
+            release = asyncio.Event()
+            capture_started = asyncio.Event()
+            late: list[tuple[str, str]] = []
+            late_seen = asyncio.Event()
+
+            async def resist_cancellation(*, started: asyncio.Event | None = None) -> None:
+                if started is not None:
+                    started.set()
+                while not release.is_set():
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError:
+                        continue
+
+            class Sidecar:
+                async def disconnect(self) -> None:
+                    await resist_cancellation()
+
+            capture = asyncio.create_task(
+                resist_cancellation(started=capture_started)
+            )
+            await capture_started.wait()
+
+            def note_late(phase: str, error_type: str) -> None:
+                late.append((phase, error_type))
+                if len(late) == 2:
+                    late_seen.set()
+
+            result = await asyncio.wait_for(
+                shutdown_evidence_sidecar(
+                    Sidecar(),
+                    {capture},
+                    timeout_seconds=0.01,
+                    cancellation_grace_seconds=0.01,
+                    on_late_completion=note_late,
+                ),
+                timeout=1.0,
+            )
+            self.assertTrue(result.disconnect.cancellation_resistant)
+            self.assertTrue(result.captures.cancellation_resistant)
+            release.set()
+            await asyncio.wait_for(late_seen.wait(), timeout=1.0)
+            self.assertEqual(
+                sorted(late),
+                [("captures", "CancelledError"), ("disconnect", "")],
+            )
+
+        asyncio.run(scenario())
+
+    def test_sidecar_shutdown_completes_cleanly_when_room_and_captures_end(self) -> None:
+        async def scenario() -> None:
+            disconnected = False
+            capture_cancelled = False
+
+            class Sidecar:
+                async def disconnect(self) -> None:
+                    nonlocal disconnected
+                    disconnected = True
+
+            async def finish_capture() -> None:
+                nonlocal capture_cancelled
+                try:
+                    await asyncio.sleep(0.01)
+                except asyncio.CancelledError:
+                    capture_cancelled = True
+                    raise
+
+            capture = asyncio.create_task(finish_capture())
+            result = await shutdown_evidence_sidecar(Sidecar(), {capture})
+            self.assertTrue(disconnected)
+            self.assertFalse(capture_cancelled)
+            self.assertTrue(result.disconnect.completed)
+            self.assertTrue(result.captures.completed)
+
+        asyncio.run(scenario())
+
+    def test_sdk_close_self_cancellation_is_an_action_failure_not_worker_cancellation(self) -> None:
+        async def scenario() -> None:
+            class Session:
+                async def aclose(self) -> None:
+                    raise asyncio.CancelledError
+
+            task = asyncio.current_task()
+            assert task is not None
+            before = task.cancelling()
+            result = await await_bounded_production_session_close(Session())
+            self.assertFalse(result.completed)
+            self.assertEqual(result.error_type, "CancelledError")
+            self.assertEqual(task.cancelling(), before)
+
+        asyncio.run(scenario())
+
+    def test_room_disconnect_skips_sdk_close_task_entirely(self) -> None:
+        async def scenario() -> None:
+            class Session:
+                def aclose(self) -> None:
+                    raise AssertionError("SDK close must not start after transport loss")
+
+            result = await close_production_session_after_room_end(
+                Session(),
+                room_transport_disconnected=lambda: True,
+            )
+            self.assertFalse(result.completed)
+            self.assertFalse(result.required)
+            self.assertEqual(result.skipped_reason, "room_transport_disconnected")
+
+        asyncio.run(scenario())
+
+    def test_browser_report_that_ignores_cancellation_cannot_hold_teardown(self) -> None:
+        async def scenario() -> None:
+            release = asyncio.Event()
+            late_seen = asyncio.Event()
+            late_results: list[str] = []
+
+            async def resistant_report() -> None:
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+
+            report = asyncio.create_task(resistant_report())
+            result = await asyncio.wait_for(
+                await_bounded_teardown_task(
+                    report,
+                    timeout_seconds=0.01,
+                    cancellation_grace_seconds=0.01,
+                    on_late_completion=lambda error_type: (
+                        late_results.append(error_type),
+                        late_seen.set(),
+                    ),
+                ),
+                timeout=0.1,
+            )
+            self.assertFalse(result.completed)
+            self.assertTrue(result.cancellation_resistant)
+            self.assertEqual(result.error_type, "TimeoutError")
+            release.set()
+            await asyncio.wait_for(late_seen.wait(), timeout=0.1)
+            self.assertEqual(late_results, [""])
+
+        asyncio.run(scenario())
+
+    def test_connected_room_still_closes_sdk_session(self) -> None:
+        async def scenario() -> None:
+            closed = False
+
+            class Session:
+                async def aclose(self) -> None:
+                    nonlocal closed
+                    closed = True
+
+            result = await close_production_session_after_room_end(
+                Session(),
+                room_transport_disconnected=lambda: False,
+            )
+            self.assertTrue(result.completed)
+            self.assertTrue(result.required)
+            self.assertTrue(closed)
+            self.assertEqual(result.skipped_reason, "")
+
+        asyncio.run(scenario())
+
+    def test_disconnect_state_is_read_when_close_coroutine_runs(self) -> None:
+        async def scenario() -> None:
+            disconnected = False
+
+            class Session:
+                def aclose(self) -> None:
+                    raise AssertionError("late transport loss must prevent SDK close")
+
+            close = close_production_session_after_room_end(
+                Session(),
+                room_transport_disconnected=lambda: disconnected,
+            )
+            disconnected = True
+            result = await close
+            self.assertFalse(result.completed)
+            self.assertFalse(result.required)
+            self.assertEqual(result.skipped_reason, "room_transport_disconnected")
+
+        asyncio.run(scenario())
+
+    def test_production_entrypoint_bounds_sdk_close_after_terminal_goodbye_join(self) -> None:
+        source = self._production_agent_source()
+        entrypoint = source[source.index("async def production_agent(") :]
+        terminal_join = entrypoint.index("await settle_worker_terminal_end_call(")
+        bounded_close = entrypoint.index("await close_production_session_after_room_end(")
+        evidence_freeze = entrypoint.index("finalized = await finalize_off_loop(recorder)")
+        self.assertLess(terminal_join, bounded_close)
+        self.assertLess(bounded_close, evidence_freeze)
+        self.assertNotIn("await session.aclose()", entrypoint)
+
+    def test_room_disconnect_wakes_the_single_production_teardown_path_once(self) -> None:
+        finishes: list[str] = []
+        events: list[tuple[str, dict]] = []
+        handler = production_room_disconnect_handler(
+            finish=lambda: finishes.append("finished"),
+            emit=lambda event, **details: events.append((event, details)),
+        )
+
+        handler("transport_closed")
+        handler("duplicate")
+        self.assertIn(handler, {handler})
+        self.assertEqual(finishes, ["finished"])
+        self.assertTrue(handler.triggered)
+        self.assertEqual(
+            events,
+            [
+                (
+                    "room_disconnected",
+                    {"shutdown_source": "livekit_room"},
+                )
+            ],
+        )
+
+    def test_production_entrypoint_skips_sdk_close_after_room_transport_disconnect(self) -> None:
+        source = self._production_agent_source()
+        entrypoint = source[source.index("async def production_agent(") :]
+        room_signal = entrypoint.index(
+            "room_disconnect = production_room_disconnect_handler("
+        )
+        teardown = entrypoint.index("await settle_worker_terminal_end_call(")
+        close_decision = entrypoint.index(
+            "await close_production_session_after_room_end(", teardown
+        )
+        disconnected_input = entrypoint.index(
+            "room_transport_disconnected=lambda: room_disconnect.triggered", close_decision
+        )
+        disconnected_guard = entrypoint.index("if not session_close.required:", teardown)
+        skipped = entrypoint.index('"session_close_skipped"', disconnected_guard)
+        evidence_freeze = entrypoint.index("finalized = await finalize_off_loop(recorder)", skipped)
+        self.assertLess(room_signal, teardown)
+        self.assertLess(teardown, close_decision)
+        self.assertLess(close_decision, disconnected_input)
+        self.assertLess(disconnected_input, disconnected_guard)
+        self.assertLess(disconnected_guard, skipped)
+        self.assertLess(skipped, evidence_freeze)
+
+    def test_production_entrypoint_registers_room_waker_before_waiting(self) -> None:
+        source = self._production_agent_source()
+        entrypoint = source[source.index("async def production_agent(") :]
+        registration = entrypoint.index('ctx.room.on(\n        "disconnected"')
+        blocking_wait = entrypoint.index("await finished.wait()")
+        self.assertLess(registration, blocking_wait)
+        self.assertIn("production_room_disconnect_handler(", entrypoint)
+        self.assertIn("finish=finish_session", entrypoint)
+        self.assertNotIn("ctx.add_shutdown_callback(", entrypoint)
+
+    @staticmethod
+    def _session_options_for_turn_taking() -> dict[str, object]:
+        # This deliberately resembles the immutable stack built once per job:
+        # the VAD object represents the prewarmed process-shared Silero VAD,
+        # while nested turn maps are the SDK's per-session input.
+        return {
+            "vad": {"prewarmed": True, "min_silence_duration": 0.25},
+            "turn_handling": {
+                "turn_detection": "turn-detector",
+                "endpointing": {"mode": "fixed", "min_delay": 0.2, "max_delay": 0.6},
+                "interruption": {
+                    "enabled": True,
+                    "mode": "vad",
+                    "min_duration": 0.15,
+                    "min_words": 0,
+                    "false_interruption_timeout": 1.0,
+                    "resume_false_interruption": True,
+                },
+            },
+        }
+
+    def test_managed_english_pstn_defaults_require_half_second_of_speech(self) -> None:
+        config = _config(language="en")
+        config["direction"] = "outbound"
+        source = self._session_options_for_turn_taking()
+
+        options = session_options_with_managed_pstn_turn_taking(source, realtime_config=config)
+        interruption = options["turn_handling"]["interruption"]
+
+        self.assertEqual(
+            interruption["min_duration"],
+            MANAGED_PSTN_INTERRUPTION_MIN_DURATION_SECONDS,
+        )
+        # Deterministic policy fixtures in place of copyrighted media: silence
+        # and a short background/backchannel segment do not meet the threshold,
+        # while a sustained foreground "stop" does and remains within the
+        # 800 ms caller-interruption contract.
+        self.assertLess(0.30, interruption["min_duration"])
+        self.assertLess(0.25, interruption["min_duration"])
+        self.assertLessEqual(interruption["min_duration"], 0.80)
+        self.assertEqual(interruption["min_words"], 0)
+        self.assertIs(interruption["resume_false_interruption"], True)
+
+    def test_managed_english_pstn_turn_taking_maps_only_safe_session_controls(self) -> None:
+        config = _config(language="en")
+        config.update(
+            {
+                "direction": "inbound",
+                "turn_taking": {
+                    "interruption_sensitivity": "high",
+                    "min_speech_ms": 640,
+                    "silence_hold_ms": 450,
+                    "barge_in_speech_rms": 400,
+                },
+            }
+        )
+        source = self._session_options_for_turn_taking()
+        shared_vad = source["vad"]
+
+        options = session_options_with_managed_pstn_turn_taking(source, realtime_config=config)
+
+        # Explicit duration and silence controls deterministically override the
+        # preset via real AgentSession options.  Audio-RMS gating has no safe
+        # per-session LiveKit equivalent, so it is intentionally absent.
+        self.assertEqual(options["turn_handling"]["interruption"]["min_duration"], 0.64)
+        self.assertEqual(options["turn_handling"]["endpointing"]["min_delay"], 0.45)
+        self.assertNotIn("barge_in_speech_rms", options["turn_handling"]["interruption"])
+        self.assertIs(options["vad"], shared_vad)
+        self.assertEqual(source["vad"], {"prewarmed": True, "min_silence_duration": 0.25})
+        self.assertEqual(source["turn_handling"]["interruption"]["min_duration"], 0.15)
+        self.assertEqual(source["turn_handling"]["endpointing"]["min_delay"], 0.2)
+
+    def test_sensitivity_presets_are_per_session_and_do_not_contaminate_shared_vad(self) -> None:
+        source = self._session_options_for_turn_taking()
+        high = _config(language="en")
+        high.update({"direction": "outbound", "turn_taking": {"interruption_sensitivity": "high"}})
+        low = _config(language="en")
+        low.update({"direction": "outbound", "turn_taking": {"interruption_sensitivity": "low"}})
+
+        start = threading.Barrier(2)
+        results: dict[str, dict[str, object]] = {}
+        failures: list[BaseException] = []
+
+        def build(name: str, config: dict) -> None:
+            try:
+                start.wait(timeout=5)
+                results[name] = session_options_with_managed_pstn_turn_taking(
+                    source, realtime_config=config
+                )
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                failures.append(exc)
+
+        threads = [
+            threading.Thread(target=build, args=("high", high)),
+            threading.Thread(target=build, args=("low", low)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        self.assertFalse(failures)
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        high_options = results["high"]
+        low_options = results["low"]
+
+        # A soft-spoken caller can explicitly choose high sensitivity; a low
+        # sensitivity caller must sustain speech longer.  Neither setting
+        # changes the shared VAD or leaks into the other session.
+        self.assertEqual(high_options["turn_handling"]["interruption"]["min_duration"], 0.15)
+        self.assertEqual(low_options["turn_handling"]["interruption"]["min_duration"], 0.75)
+        self.assertEqual(low_options["turn_handling"]["endpointing"]["min_delay"], 0.9)
+        self.assertEqual(low_options["turn_handling"]["endpointing"]["max_delay"], 1.8)
+        self.assertIs(high_options["vad"], source["vad"])
+        self.assertIs(low_options["vad"], source["vad"])
+        self.assertEqual(source["turn_handling"]["interruption"]["min_duration"], 0.15)
+
+    def test_invalid_turn_taking_falls_back_to_the_safe_managed_default(self) -> None:
+        config = _config(language="en")
+        config.update(
+            {
+                "direction": "outbound",
+                "turn_taking": {
+                    "interruption_sensitivity": "yolo",
+                    "min_speech_ms": False,
+                    "silence_hold_ms": float("inf"),
+                    "barge_in_speech_rms": float("nan"),
+                },
+            }
+        )
+        options = session_options_with_managed_pstn_turn_taking(
+            self._session_options_for_turn_taking(), realtime_config=config
+        )
+
+        self.assertEqual(
+            options["turn_handling"]["interruption"]["min_duration"],
+            MANAGED_PSTN_INTERRUPTION_MIN_DURATION_SECONDS,
+        )
+        # Junk reads as balanced: the managed phone line's default detector hold.
+        self.assertEqual(options["turn_handling"]["endpointing"]["min_delay"], 0.6)
+        self.assertEqual(options["turn_handling"]["endpointing"]["max_delay"], 1.2)
+
+    def test_browser_session_options_remain_unchanged(self) -> None:
+        """Nothing without a customer call direction is touched at all.
+
+        Browser tests, the standalone demo and the platform release canary
+        keep the shared demo stack's own mapping, by identity.
+        """
+
+        source = self._session_options_for_turn_taking()
+        config = _config(language="en")
+        config.update(
+            {
+                "direction": "web_test",
+                "turn_taking": {"interruption_sensitivity": "low", "min_speech_ms": 900},
+            }
+        )
+
+        options = session_options_with_managed_pstn_turn_taking(source, realtime_config=config)
+
+        self.assertIs(options["turn_handling"], source["turn_handling"])
+        self.assertEqual(options["turn_handling"]["interruption"]["min_duration"], 0.15)
+
+    def test_a_non_english_managed_call_takes_explicit_values_over_the_preset(self) -> None:
+        """Explicit values win over the preset, and the preset applies too.
+
+        Three decisions in sequence, and a reader restoring an earlier belief
+        would undo a later one. First, non-English calls sat on the demo
+        baseline. Then the 0.50 s default crossed into every language. Then the
+        2026-09-08 decision made an explicit ``min_speech_ms``/``silence_hold_ms``
+        a platform behaviour in every language, and the 2026-09-15 decision did the
+        same for ``interruption_sensitivity`` once the Sinhala replays showed
+        the floor is a property of the line and the VAD.
+
+        This fixture is detector-shaped (``turn_detection`` is not ``"vad"``),
+        so the preset's hold row is the model one: the row follows the built
+        stack's mode, which ``demo.py`` derives from the language set, rather
+        than a second reading of the language here.
+        """
+
+        for language, direction in (("et", "inbound"), ("si", "outbound"), ("ta", "outbound")):
+            source = self._session_options_for_turn_taking()
+            config = _config(language=language)
+            config.update(
+                {
+                    "direction": direction,
+                    "turn_taking": {"interruption_sensitivity": "low", "min_speech_ms": 900},
+                }
+            )
+
+            options = session_options_with_managed_pstn_turn_taking(source, realtime_config=config)
+            interruption = options["turn_handling"]["interruption"]
+
+            # The explicit 900 ms wins over the "low" preset's own 0.75 s.
+            self.assertEqual(interruption["min_duration"], 0.9, (language, direction))
+            # No silence_hold_ms was set, so the preset's holds apply: the
+            # model row's 0.9 s / 1.8 s on this detector-shaped stack.
+            self.assertEqual(
+                options["turn_handling"]["endpointing"],
+                {"mode": "fixed", "min_delay": 0.9, "max_delay": 1.8},
+                (language, direction),
+            )
+            self.assertEqual(source["turn_handling"]["endpointing"]["min_delay"], 0.2)
+            # The caller's own mapping is never mutated in place.
+            self.assertEqual(source["turn_handling"]["interruption"]["min_duration"], 0.15)
+
+    def test_a_non_english_managed_call_with_no_tuning_gets_the_floor(self) -> None:
+        """No per-agent request at all: the platform floor and the default phone-line hold."""
+
+        for language, direction in (("et", "inbound"), ("si", "outbound"), ("ta", "outbound")):
+            source = self._session_options_for_turn_taking()
+            config = _config(language=language)
+            config.update({"direction": direction})
+
+            options = session_options_with_managed_pstn_turn_taking(source, realtime_config=config)
+
+            self.assertEqual(
+                options["turn_handling"]["interruption"]["min_duration"],
+                MANAGED_PSTN_INTERRUPTION_MIN_DURATION_SECONDS,
+                (language, direction),
+            )
+            # Detector-shaped fixture: the balanced detector row applies.
+            self.assertEqual(
+                options["turn_handling"]["endpointing"],
+                {**source["turn_handling"]["endpointing"], "min_delay": 0.6, "max_delay": 1.2},
+                (language, direction),
+            )
+
+    @_worker_source_guard
+    def test_worker_applies_the_call_bound_session_policy_before_constructing_agent_session(self) -> None:
+        source = self._production_agent_source()
+        session_setup = source[
+            source.index("session_options = session_options_with_managed_pstn_turn_taking("):
+            source.index("session = AgentSession(**session_options)")
+        ]
+        self.assertIn("realtime_config=call.config", session_setup)
+        # Browser-specific connect-error behaviour remains an additive option
+        # on the copied session mapping, after the policy seam has selected
+        # managed PSTN versus browser-test behaviour.
+        self.assertIn("if browser_test is not None:", session_setup)
+
     def test_pre_media_failure_removes_participant_and_room_before_sip_failure(self) -> None:
         async def scenario() -> tuple[dict[str, object], list[str]]:
             events: list[str] = []
@@ -296,6 +915,14 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         self.assertTrue(result["participant_terminated"])
         self.assertTrue(result["room_terminated"])
         self.assertTrue(result["lifecycle_recorded"])
+
+    def test_browser_participant_mismatch_has_a_safe_distinct_lifecycle_reason(self) -> None:
+        self.assertEqual(
+            pre_media_lifecycle_reason(
+                "adapter_configuration", participant_mismatch=True
+            ),
+            "participant_mismatch_rejected",
+        )
 
     def test_browser_test_error_metadata_keeps_the_reservation_document(self) -> None:
         """The route writes this document first; the worker adds to it, never over it."""
@@ -438,6 +1065,111 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         return _PRODUCTION_AGENT.read_text()
 
     @_worker_source_guard
+    def test_preplayout_text_evidence_wraps_both_normal_and_workflow_agents(self) -> None:
+        """Pin the LiveKit-only glue to the source when the SDK is absent.
+
+        The recorder itself is unit-tested independently.  This guard catches
+        the more dangerous regression where a future worker refactor leaves
+        the durable pre-playout path intact but starts one of the two agent
+        modes with the bare SDK ``Agent`` again.
+        """
+
+        source = self._production_agent_source()
+        tree = ast.parse(source)
+        classes = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+        }
+        evidence = classes["EvidenceAgent"]
+        self.assertEqual(
+            [base.id for base in evidence.bases if isinstance(base, ast.Name)],
+            ["Agent"],
+        )
+        tts_node = next(
+            node
+            for node in evidence.body
+            if isinstance(node, ast.FunctionDef) and node.name == "tts_node"
+        )
+        self.assertTrue(
+            any(_calls_named(statement, "admitted_tts_text") for statement in tts_node.body),
+            "TTS text must be bound before the SDK starts synthesis",
+        )
+        self.assertTrue(
+            any(
+                _calls_named(statement, "complete_preplayout_agent_speech")
+                for statement in tts_node.body
+            ),
+            "handle completion must retain interruption metadata",
+        )
+        self.assertIn("admits_conversation_item", ast.unparse(tts_node))
+        # A voice-to-voice engine has no TTS node: its own output transcript
+        # is bound at the transcription node, under the speech's id, and only
+        # when the agent was built for that engine.
+        transcription_node = next(
+            node
+            for node in evidence.body
+            if isinstance(node, ast.FunctionDef) and node.name == "transcription_node"
+        )
+        self.assertTrue(
+            any(
+                _calls_named(statement, "bound_output_transcript")
+                for statement in transcription_node.body
+            ),
+            "the engine's output transcript must be bound under its speech id",
+        )
+        self.assertIn("if not self._speech_to_speech:", ast.unparse(transcription_node))
+        self.assertIn('evidence_agent_kwargs["speech_to_speech"] = True', source)
+        self.assertNotIn("WorkflowTurnAgent", classes)
+
+        construction = next(node.value for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+            and node.target.id == "session_agent")
+        self.assertEqual(ast.unparse(construction.func), "EvidenceAgent")
+        keywords = {keyword.arg: ast.unparse(keyword.value) for keyword in construction.keywords}
+        self.assertEqual(keywords["recorder"], "recorder")
+        self.assertEqual(keywords["admission"], "semantic_admission")
+        # And that same object is the one the session actually starts.
+        self.assertIn("agent=session_agent,", source)
+
+    def test_admitted_tts_text_binds_before_yield_and_stops_after_admission_closes(
+        self,
+    ) -> None:
+        class Recorder:
+            def __init__(self) -> None:
+                self.bound: list[tuple[str, str]] = []
+
+            def bind_preplayout_agent_text(self, speech_id: str, chunk: str) -> None:
+                self.bound.append((speech_id, chunk))
+
+        async def run() -> tuple[list[str], list[tuple[str, str]]]:
+            admission = SemanticTurnAdmission()
+            recorder = Recorder()
+
+            async def source():
+                yield "before close"
+                admission.close()
+                yield "after close"
+
+            delivered: list[str] = []
+            async for chunk in admitted_tts_text(
+                source(),
+                speech_id="speech_1",
+                recorder=recorder,
+                admission=admission,
+            ):
+                # Binding precedes the synthesizer's receipt of this chunk.
+                if chunk == "before close":
+                    self.assertEqual(recorder.bound, [("speech_1", chunk)])
+                delivered.append(chunk)
+            return delivered, recorder.bound
+
+        delivered, bound = asyncio.run(run())
+
+        self.assertEqual(delivered, ["before close", "after close"])
+        self.assertEqual(bound, [("speech_1", "before close")])
+
+    @_worker_source_guard
     def test_the_browser_failure_report_is_wired_to_the_session_and_to_the_pre_media_guard(
         self,
     ) -> None:
@@ -462,11 +1194,25 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         self.assertIn("report_browser_test_failure(component)", close)
         # Phone calls have no dock listening and must not pay for this at all.
         self.assertIn("if browser_test is None:", close)
+        # The same close ends a PHONE call whose engine gave up, through the
+        # arbiter, inside the phone-call branch and before its return: the
+        # browser test keeps its report-and-deadline contract untouched.
+        phone_branch = close[close.index("if browser_test is None:") :]
+        phone_branch = phone_branch[: phone_branch.index("component = browser_test_close_component(")]
+        self.assertIn("session_closed(event)", phone_branch)
+        self.assertLess(phone_branch.index("session_closed(event)"), phone_branch.index("return"))
+        self.assertNotIn("session_closed(event)", close.replace(phone_branch, ""))
+        wiring = source[: source.index('@session.on("close")')]
+        wiring = wiring[wiring.rindex("production_session_close_handler(") :]
+        self.assertIn("TERMINATION_MODEL_SESSION_LOST", wiring)
+        self.assertIn("DETECTED_VIA_SESSION_CLOSED", wiring)
+        self.assertIn("is_finishing=finished.is_set", wiring)
 
         # The pre-media seam: a stack that will not build never reaches the
         # session, so the guard reports before the teardown deletes the room.
-        guard = source[source.index("    except BaseException:") :]
-        guard = guard[: guard.index("terminate_pre_media_call(")]
+        from livekit_agent import production as shared_production
+        import inspect
+        guard = inspect.getsource(shared_production.settle_pre_media_failure)
         self.assertIn('report_browser_test_failure("session")', guard)
 
         # Structure, not adjacency. Asserting that a `finally:` appears after the
@@ -481,7 +1227,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         # try/finally elsewhere. And it must be the SAME Try, not any two.
         reporting_tries = [
             node
-            for node in ast.walk(tree)
+            for node in ast.walk(ast.parse(guard))
             if isinstance(node, ast.Try)
             and any(_calls_named(stmt, "report_browser_test_failure") for stmt in node.body)
         ]
@@ -498,15 +1244,19 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         # about to be deleted.
         waits = [
             call
-            for call in _calls_named(tree, "wait_for")
+            for call in _calls_named(tree, "await_bounded_teardown_task")
             if _mentions(call, "browser_test_report_task")
         ]
-        self.assertEqual(len(waits), 1, "exactly one teardown wait on the report task")
+        self.assertEqual(len(waits), 1, "exactly one bounded teardown wait on the report task")
         wait = waits[0]
         # Placed between the close that produces the report and the delete that
         # destroys the room it lives in. That ordering is the entire reason this
         # wait exists, so it is pinned by line rather than left to the prose.
-        closes = [call for call in _calls_named(tree, "aclose") if _mentions(call, "session")]
+        closes = [
+            call
+            for call in _calls_named(tree, "close_production_session_after_room_end")
+            if _mentions(call, "session")
+        ]
         self.assertTrue(closes, "the session close must precede the wait")
         self.assertLess(min(c.lineno for c in closes), wait.lineno)
         # EVERY shape a room delete takes, not just the wrapper. A reviewer put
@@ -521,7 +1271,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         entrypoint = next(
             node
             for node in ast.walk(tree)
-            if isinstance(node, ast.AsyncFunctionDef) and node.name == "production_agent"
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_production_agent_job"
         )
         # Nested delete helpers are excluded by what they DO, not by their name:
         # they wrap the delete and are defined before the wait, and pinning the
@@ -553,12 +1303,12 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         # The SAME constant the reporter budgets against, as the timeout ARGUMENT.
         # A literal reads identically and lets the two clocks drift apart, which
         # is the whole reason that constant exists.
-        timeouts = [kw.value for kw in wait.keywords if kw.arg == "timeout"]
+        timeouts = [kw.value for kw in wait.keywords if kw.arg == "timeout_seconds"]
         self.assertEqual(len(timeouts), 1, "the wait must carry an explicit timeout")
         self.assertIsInstance(timeouts[0], ast.Name)
         self.assertEqual(timeouts[0].id, "BROWSER_TEST_REPORT_BUDGET_SECONDS")
-        # Unshielded, or the timeout cancels the shield and leaves the reporter
-        # running against a room this teardown is about to delete.
+        # Unshielded, so owner cancellation reaches the bounded helper and it
+        # can cancel/observe the reporter before the caller defers cancellation.
         self.assertFalse(
             _calls_named(wait, "shield"), "the awaited task must not be shielded"
         )
@@ -587,11 +1337,12 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         # try also contains this task by name, and matching it would read the
         # wrong handlers entirely.
         def _awaits_directly(stmt: ast.stmt, call: ast.Call) -> bool:
-            return (
-                isinstance(stmt, ast.Expr)
-                and isinstance(stmt.value, ast.Await)
-                and stmt.value.value is call
+            value = (
+                stmt.value
+                if isinstance(stmt, (ast.Expr, ast.Assign, ast.AnnAssign))
+                else None
             )
+            return isinstance(value, ast.Await) and value.value is call
 
         teardown_tries = [
             node
@@ -808,6 +1559,24 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         )
         self.assertIn("return", body[body.index("browser_test_failure_reported = True") :])
 
+    @_worker_source_guard
+    def test_a_duplicate_browser_worker_exits_without_failing_or_deleting_the_owned_room(
+        self,
+    ) -> None:
+        tree = ast.parse(self._production_agent_source())
+        handlers = [
+            handler
+            for handler in ast.walk(tree)
+            if isinstance(handler, ast.ExceptHandler)
+            and isinstance(handler.type, ast.Name)
+            and handler.type.id == "BrowserSessionAlreadyOwned"
+        ]
+        self.assertEqual(len(handlers), 1)
+        handler = handlers[0]
+        self.assertTrue(any(isinstance(node, ast.Return) for node in ast.walk(handler)))
+        self.assertFalse(_calls_named(handler, "terminate_pre_media_call"))
+        self.assertFalse(_calls_named(handler, "report_browser_test_failure"))
+
     def test_pre_media_teardown_accepts_the_tracked_task_livekit_actually_returns(self) -> None:
         """``ctx.delete_room`` is passed straight in, and it does not return a coroutine.
 
@@ -896,8 +1665,8 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         response = post_livekit_worker_heartbeat(
             transport,
             {
-                "OPENPHONEX_WORKER_ID": "livekit-prod",
-                "OPENPHONEX_WORKER_API_TOKEN": "must-not-leak",
+                "SKYSAY_WORKER_ID": "livekit-prod",
+                "SKYSAY_WORKER_API_TOKEN": "must-not-leak",
             },
             process_id=42,
         )
@@ -913,7 +1682,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         self.assertTrue(worker_heartbeats_enabled({}))
         for value in ("0", "false", "no", "off", "FALSE"):
             with self.subTest(value=value):
-                self.assertFalse(worker_heartbeats_enabled({"OPENPHONEX_WORKER_HEARTBEAT_ENABLED": value}))
+                self.assertFalse(worker_heartbeats_enabled({"SKYSAY_WORKER_HEARTBEAT_ENABLED": value}))
 
     def test_service_heartbeat_reports_exact_revision_without_a_job_process(self) -> None:
         posted = threading.Event()
@@ -939,8 +1708,8 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
     def test_idle_service_heartbeat_has_its_own_exact_revision_row(self) -> None:
         service_environ = service_heartbeat_environ(
             {
-                "OPENPHONEX_WORKER_ID": "livekit-prod",
-                "OPENPHONEX_VOICE_IMAGE_REVISION": "b" * 40,
+                "SKYSAY_WORKER_ID": "livekit-prod",
+                "SKYSAY_VOICE_IMAGE_REVISION": "b" * 40,
             }
         )
         payload = post_livekit_worker_heartbeat(
@@ -964,9 +1733,9 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         self.assertEqual(executed_tool_names(_ToolsExecutedEvent()), ["list_calls"])
 
     def test_interrupted_greeting_fragment_is_not_a_semantic_answer(self) -> None:
-        greeting = "Tere! Olete helistanud OpenPhonexile. Kuidas saan aidata?"
+        greeting = "Tere! Olete helistanud Skysayile. Kuidas saan aidata?"
         self.assertTrue(
-            is_greeting_fragment("Tere! Olete helistanud OpenPhonexile. Kuidas saan", greeting)
+            is_greeting_fragment("Tere! Olete helistanud Skysayile. Kuidas saan", greeting)
         )
         self.assertFalse(is_greeting_fragment("Leidsin üksteist kõnet.", greeting))
 
@@ -1362,6 +2131,100 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
             referee_semantic_response_audio_policy(),
         )
 
+    def test_effective_stack_marks_ambience_as_configured_not_observed(self) -> None:
+        config = _config(language="en")
+        config["audio_environment"] = {
+            "preset_id": "cafe",
+            "asset_version": "v1",
+            "volume": 35,
+            "runtime_gain_linear": 0.07,
+            "runtime_gain_db": -23.098,
+            "channel": "outgoing_background_track",
+        }
+
+        identity = effective_voice_stack_identity(config)
+
+        self.assertEqual(identity["configuration"]["audio_environment"], {
+            "preset_id": "cafe",
+            "asset_version": "v1",
+            "volume": 35,
+            "channel": "outgoing_background_track",
+            "status": "configured",
+        })
+
+    def test_effective_stack_never_calls_an_unshaped_ambience_mapping_configured(self) -> None:
+        config = _config(language="en")
+        config["audio_environment"] = {"preset_id": "cafe", "volume": 35}
+
+        identity = effective_voice_stack_identity(config)
+
+        self.assertEqual(identity["configuration"]["audio_environment"]["status"], "invalid")
+
+    def test_effective_stack_does_not_trust_unrecognized_ambience_status(self) -> None:
+        config = _config(language="en")
+        config["audio_environment"] = {
+            "preset_id": "cafe",
+            "asset_version": "v1",
+            "volume": 35,
+            "runtime_gain_linear": 0.07,
+            "runtime_gain_db": -23.098,
+            "channel": "outgoing_background_track",
+            # The worker rejects this unsupported key, so it cannot turn
+            # configuration evidence into a false runtime observation.
+            "status": "observed",
+        }
+
+        identity = effective_voice_stack_identity(config)
+
+        self.assertEqual(identity["configuration"]["audio_environment"]["status"], "invalid")
+
+    def test_evidence_excludes_only_a_noncaller_ambience_track(self) -> None:
+        self.assertFalse(
+            is_noncaller_ambience_track(
+                publication_name="background_audio",
+                participant_identity="caller-1",
+                caller_identity="caller-1",
+                agent_identity="agent-1",
+                ambience_track_name="background_audio",
+            )
+        )
+        self.assertTrue(
+            is_noncaller_ambience_track(
+                publication_name="background_audio",
+                participant_identity="agent-1",
+                caller_identity="caller-1",
+                agent_identity="agent-1",
+                ambience_track_name="background_audio",
+            )
+        )
+        self.assertFalse(
+            is_noncaller_ambience_track(
+                publication_name="semantic_response",
+                participant_identity="agent-1",
+                caller_identity="caller-1",
+                agent_identity="agent-1",
+                ambience_track_name="background_audio",
+            )
+        )
+        self.assertFalse(
+            is_noncaller_ambience_track(
+                publication_name="background_audio",
+                participant_identity="bridge-1",
+                caller_identity="caller-1",
+                agent_identity="agent-1",
+                ambience_track_name="background_audio",
+            )
+        )
+        self.assertFalse(
+            is_noncaller_ambience_track(
+                publication_name="background_audio",
+                participant_identity="agent-1",
+                caller_identity="caller-1",
+                agent_identity="",
+                ambience_track_name="background_audio",
+            )
+        )
+
     def test_model_labels_come_from_the_resolved_profile_not_the_raw_config(self) -> None:
         # Telemetry must record what this worker BUILT. Reading the raw config
         # would record what it was asked for, which is a different claim.
@@ -1374,7 +2237,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         # si-LK routes STT to Google streaming STT and TTS to Gemini-TTS. The labels
         # must track the registry rather than assuming the ElevenLabs default.
         config = _config(language="si")
-        config["transcriber"] = {"registry_name": "google", "model": "command_and_search", "language": "si"}
+        config["transcriber"] = {"registry_name": "google", "model": "chirp_2", "language": "si"}
         config["voice"] = {
             "registry_name": "gemini_tts",
             "model": "gemini-2.5-flash-preview-tts",
@@ -1383,7 +2246,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         }
         labels = component_model_labels(profile_from_realtime_config(config))
 
-        self.assertEqual(labels["stt"], "command_and_search")
+        self.assertEqual(labels["stt"], "chirp_2")
         self.assertEqual(labels["tts"], "gemini-2.5-flash-preview-tts")
 
     def test_realtime_config_is_the_only_semantic_stack_source(self) -> None:
@@ -1402,7 +2265,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         with self.assertRaisesRegex(ProductionConfigurationError, "ElevenLabs"):
             profile_from_realtime_config(bad)
 
-    def test_sinhala_realtime_config_requires_google_stt_and_gemini_tts(self) -> None:
+    def test_sinhala_realtime_config_requires_a_declared_stt_and_tts(self) -> None:
         config = {
             "agent_id": "agent_1",
             "organization_id": "org_1",
@@ -1412,7 +2275,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
             "first_message": "Ayubowan!",
             "tools": [],
             "recording_enabled": True,
-            "transcriber": {"registry_name": "google", "model": "command_and_search", "language": "si"},
+            "transcriber": {"registry_name": "google", "model": "chirp_2", "language": "si"},
             "model": {"registry_name": "gemini", "model": "gemini-2.5-flash-lite"},
             "voice": {
                 "registry_name": "gemini_tts",
@@ -1430,22 +2293,43 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         self.assertEqual(profile.tts_registry, "gemini_tts")
         self.assertEqual(profile.voice_id, "Kore")
 
-        batch_only = dict(config)
-        batch_only["transcriber"] = {
+        self.assertEqual(profile.stt_model, "chirp_2")
+
+        # Google Speech V1 ``command_and_search`` is gone from the live Google
+        # allowlist. A leftover stored identity is refused before media, not
+        # remapped onto Chirp 2.
+        leftover_v1 = dict(config)
+        leftover_v1["transcriber"] = {
             "registry_name": "google",
-            "model": "chirp_2",
+            "model": "command_and_search",
             "language": "si",
         }
-        with self.assertRaisesRegex(ProductionConfigurationError, "streaming"):
-            profile_from_realtime_config(batch_only)
+        with self.assertRaisesRegex(ProductionConfigurationError, "supported STT provider/model"):
+            profile_from_realtime_config(leftover_v1)
+
+        # A third Google model, with no evidence behind it, is still refused
+        # before media.
+        unqualified = dict(config)
+        unqualified["transcriber"] = {
+            "registry_name": "google",
+            "model": "latest_long",
+            "language": "si",
+        }
+        with self.assertRaisesRegex(ProductionConfigurationError, "supported STT provider/model"):
+            profile_from_realtime_config(unqualified)
 
         # Deepgram cannot serve si-LK STT at all.
         deepgram_stt = dict(config)
         deepgram_stt["transcriber"] = {"registry_name": "deepgram", "model": "nova-3", "language": "si"}
-        with self.assertRaisesRegex(ProductionConfigurationError, "Sinhala"):
+        with self.assertRaisesRegex(ProductionConfigurationError, "supported STT provider/model"):
             profile_from_realtime_config(deepgram_stt)
 
-        # ElevenLabs cannot serve si-LK TTS at all.
+        # ElevenLabs cannot serve si-LK TTS at all, and the refusal no longer
+        # comes from a rule that names Sinhala. The named Sinhala allow-lists
+        # were removed once an enumeration showed they flipped no verdict; the
+        # declaration refuses this the same way it refuses every other
+        # language a provider does not declare, which is the whole point of
+        # removing them.
         elevenlabs_tts = dict(config)
         elevenlabs_tts["voice"] = {
             "registry_name": "elevenlabs",
@@ -1453,7 +2337,9 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
             "voice_id": "voice_1",
             "language": "si",
         }
-        with self.assertRaisesRegex(ProductionConfigurationError, "Sinhala"):
+        with self.assertRaisesRegex(
+            ProductionConfigurationError, "supported TTS provider/model"
+        ):
             profile_from_realtime_config(elevenlabs_tts)
 
     # Source-inspection guard over a private control-plane seed script that is
@@ -1497,7 +2383,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
                 )
             ],
         )
-        self.assertEqual(json.loads(output)["result"]["content"][0]["json"]["calls"], [])
+        self.assertEqual(json.loads(output)["result"]["structuredContent"]["calls"], [])
         self.assertEqual(tool_usage.snapshot(), {"list_calls": 1})
 
     def test_model_cannot_override_authenticated_tool_tenant(self) -> None:
@@ -1612,7 +2498,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
                 language="et",
                 on_ending=lambda: events.append("ending"),
                 finish=lambda: events.append("finish"),
-                record_final_message=terminal_messages.append,
+                record_final_message=lambda message, *, interrupted=False, speech_id="", scheduled_at=None: terminal_messages.append(message),
                 emit=lambda event, **_details: events.append(event),
             )
             acknowledgement = await asyncio.wait_for(
@@ -1636,12 +2522,12 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
             completion,
             {"ok": True, "status": "teardown_requested", "playout": "completed"},
         )
-        self.assertEqual(session.say_calls, [("Head aega.", False)])
+        self.assertEqual(session.say_calls, [("Head aega.", True)])
         self.assertEqual(session.shutdown_calls, [False])
         self.assertEqual(terminal_messages, ["Head aega."])
         self.assertEqual(
             events,
-            ["ending", "say", "playout", "shutdown", "finish", "end_call"],
+            ["end_call_proposed", "say", "playout", "ending", "shutdown", "finish", "end_call"],
         )
 
     def test_end_call_is_idempotent_for_concurrent_model_invocations(self) -> None:
@@ -1670,7 +2556,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
 
         events, session, results = asyncio.run(scenario())
 
-        self.assertEqual(session.say_calls, [("Goodbye.", False)])
+        self.assertEqual(session.say_calls, [("Goodbye.", True)])
         self.assertEqual(session.shutdown_calls, [False])
         self.assertEqual(events.count("ending"), 1)
         self.assertEqual(events.count("finish"), 1)
@@ -1705,7 +2591,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
 
         events, session, result = asyncio.run(scenario())
 
-        self.assertEqual(session.say_calls, [("Goodbye.", False)])
+        self.assertEqual(session.say_calls, [("Goodbye.", True)])
         self.assertEqual(session.shutdown_calls, [False])
         self.assertEqual(result["playout"], "completed")
         self.assertEqual(events.count("finish"), 1)
@@ -1745,7 +2631,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
                 language="et",
                 on_ending=lambda: events.append("ending"),
                 finish=lambda: events.append("finish"),
-                record_final_message=terminal_messages.append,
+                record_final_message=lambda message, *, interrupted=False, speech_id="", scheduled_at=None: terminal_messages.append(message),
             )
             await action({})
             completion = await action.wait_for_completion()
@@ -1755,7 +2641,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
         session, terminal_messages, completion = asyncio.run(scenario())
 
         self.assertEqual(
-            session.say_calls, [("Aitäh helistamast. Head aega.", False)]
+            session.say_calls, [("Aitäh helistamast. Head aega.", True)]
         )
         self.assertEqual(terminal_messages, ["Aitäh helistamast. Head aega."])
         self.assertEqual(completion["playout"], "completed")
@@ -1783,18 +2669,20 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
                 language="en",
                 on_ending=admission.close,
                 finish=lambda: None,
-                record_final_message=terminal_messages.append,
+                record_final_message=lambda message, *, interrupted=False, speech_id="", scheduled_at=None: terminal_messages.append(message),
             )
             await action({"message": "Goodbye."})
+            observe_transcript("during proposed close")
+            observe_conversation_item("during proposed close")
+            await action.wait_for_completion()
             observe_transcript("must not be recorded")
             observe_conversation_item("must not be recorded")
-            await action.wait_for_completion()
             return transcripts, conversation_items, terminal_messages
 
         transcripts, conversation_items, terminal_messages = asyncio.run(scenario())
 
-        self.assertEqual(transcripts, ["before ending"])
-        self.assertEqual(conversation_items, ["before ending"])
+        self.assertEqual(transcripts, ["before ending", "during proposed close"])
+        self.assertEqual(conversation_items, ["before ending", "during proposed close"])
         self.assertEqual(terminal_messages, ["Goodbye."])
 
     def test_end_call_finish_signal_reaches_room_finalizer(self) -> None:
@@ -1828,7 +2716,7 @@ class SCH236LiveKitProductionTests(unittest.TestCase):
 
         self.assertEqual(
             events,
-            ["ending", "say", "playout", "shutdown", "finish", "control_plane_cleanup", "room_deleted"],
+            ["say", "playout", "ending", "shutdown", "finish", "control_plane_cleanup", "room_deleted"],
         )
         self.assertEqual(completion["status"], "teardown_requested")
 

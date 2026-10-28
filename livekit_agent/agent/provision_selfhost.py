@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Unigox OÜ
-"""One-shot LiveKit SIP bootstrap for the self-hosted OpenPhonex stack.
+"""One-shot LiveKit SIP bootstrap for the self-hosted Skysay stack.
 
 Generated into the public export as `livekit_agent/agent/provision_selfhost.py`
 (template: scripts/oss-release/templates/provision_selfhost.py). This is the
@@ -58,11 +58,27 @@ from typing import Any
 
 # Must match production_agent.py's AGENT_NAME so the dispatch rule routes the
 # inbound call to the worker that registered under this name.
-AGENT_NAME = "sch236-livekit-demo"
-INBOUND_TRUNK_NAME = "openphonex-selfhost-inbound"
-OUTBOUND_TRUNK_NAME = "openphonex-selfhost-outbound"
-RULE_NAME = "openphonex-selfhost-inbound-rule"
-ROOM_PREFIX = "openphonex-selfhost-"
+AGENT_NAME = "skysay-voice-c3"
+#: ``SKYSAY_AGENT_NAME`` in the environment overrides it: a rollback re-provisions
+#: the rule for the previous worker image from this tree.
+AGENT_NAME_VAR = "SKYSAY_AGENT_NAME"
+#: One token, no whitespace or control characters; an override outside it
+#: would write a rule no worker can serve, so it is refused before any
+#: trunk or rule is touched.
+AGENT_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def resolve_agent_name(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return AGENT_NAME
+    if AGENT_NAME_PATTERN.fullmatch(text) is None:
+        raise ProvisionConfigError(f"{AGENT_NAME_VAR} must be one token of letters, digits, '.', '_' or '-'")
+    return text
+INBOUND_TRUNK_NAME = "skysay-selfhost-inbound"
+OUTBOUND_TRUNK_NAME = "skysay-selfhost-outbound"
+RULE_NAME = "skysay-selfhost-inbound-rule"
+ROOM_PREFIX = "skysay-selfhost-"
 
 _E164_DIGITS = re.compile(r"[1-9][0-9]{6,14}")
 _HOSTNAME = re.compile(
@@ -486,8 +502,12 @@ def _load_outbound(environ: dict[str, str]) -> OutboundSettings | None:
     return outbound
 
 
-async def provision(*, api_module: Any | None = None, environ: dict[str, str] | None = None) -> dict[str, Any]:
+async def provision(
+    *, api_module: Any | None = None, environ: dict[str, str] | None = None, agent_name: str | None = None
+) -> dict[str, Any]:
     settings = load_settings(environ)
+    source = dict(os.environ if environ is None else environ)
+    agent_name = resolve_agent_name(agent_name or source.get(AGENT_NAME_VAR))
     if api_module is None:
         from livekit import api as api_module
 
@@ -518,6 +538,11 @@ async def provision(*, api_module: Any | None = None, environ: dict[str, str] | 
                         only_listed_codecs=True,
                         codecs=[api_module.SIPCodec(name="PCMU", rate=8_000)],
                     ),
+                    # A call no agent takes -- a worker down, a dispatch lost,
+                    # a burst past the phone host's capacity -- ends busy after
+                    # this, instead of ringing for livekit/sip's 3-minute
+                    # default. 30 s, not less: a cold agent can take ~10 s.
+                    ringing_timeout={"seconds": 30},
                 )
             )
         )
@@ -557,7 +582,7 @@ async def provision(*, api_module: Any | None = None, environ: dict[str, str] | 
                     room_config=api_module.RoomConfiguration(
                         empty_timeout=30,
                         departure_timeout=10,
-                        agents=[api_module.RoomAgentDispatch(agent_name=AGENT_NAME)],
+                        agents=[api_module.RoomAgentDispatch(agent_name=agent_name)],
                     ),
                 )
             )
@@ -584,7 +609,7 @@ async def provision(*, api_module: Any | None = None, environ: dict[str, str] | 
                 stale.append(f"trunk:{tid} ({type(exc).__name__})")
 
         result = {
-            "agent_name": AGENT_NAME,
+            "agent_name": agent_name,
             "dispatch_rule_id": rule.sip_dispatch_rule_id,
             "inbound_trunk_id": inbound_trunk.sip_trunk_id,
             "outbound_trunk_id": outbound_trunk_id,

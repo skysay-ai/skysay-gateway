@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from openphonex_common.runtime import env_enabled, env_flag
+from skysay_common.runtime import env_enabled, env_flag
 
 
 class RuntimeTests(unittest.TestCase):
@@ -15,9 +15,9 @@ class RuntimeTests(unittest.TestCase):
                 self.assertFalse(env_flag(value))
 
     def test_env_enabled_reads_supplied_env(self) -> None:
-        env = {"OPENPHONEX_HTTP_LOGS": "yes", "OPENPHONEX_LIVE_SMS_ENABLED": "on"}
-        self.assertTrue(env_enabled("OPENPHONEX_HTTP_LOGS", env))
-        self.assertTrue(env_enabled("OPENPHONEX_LIVE_SMS_ENABLED", env))
+        env = {"SKYSAY_HTTP_LOGS": "yes", "SKYSAY_LIVE_SMS_ENABLED": "on"}
+        self.assertTrue(env_enabled("SKYSAY_HTTP_LOGS", env))
+        self.assertTrue(env_enabled("SKYSAY_LIVE_SMS_ENABLED", env))
         self.assertFalse(env_enabled("MISSING_FLAG", env))
 
 
